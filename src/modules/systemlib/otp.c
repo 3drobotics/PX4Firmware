@@ -64,7 +64,7 @@ int val_read(void* dest, volatile const void* src, int bytes)
 }
 
 
-int write_otp(uint8_t id_type, uint32_t vid, uint32_t pid, char* signature)
+void write_otp(uint8_t id_type, uint32_t vid, uint32_t pid, char* signature)
 {
 	
 	warnx("write_otp: PX4 / %02X / %02X / %02X  / ... etc  \n",id_type, vid, pid); 
@@ -88,7 +88,7 @@ int write_otp(uint8_t id_type, uint32_t vid, uint32_t pid, char* signature)
         
 }
 
-int lock_otp(void)
+void lock_otp(void)
 {
 	//determine the required locking size - can only write full lock bytes */
 //	int size = sizeof(struct otp) / 32;
@@ -140,7 +140,7 @@ void F_lock(void)
 }
 
 // flash write word. 
-uint8_t F_write_word(uint32_t Address, uint32_t Data)
+void F_write_word(uint32_t Address, uint32_t Data)
 {
     unsigned char octet[4] = {0,0,0,0};  
     for (int i=0; i<4; i++)

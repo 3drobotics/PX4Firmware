@@ -144,12 +144,12 @@ typedef struct
  __EXPORT void F_lock(void);
  __EXPORT int val_read(void* dest, volatile const void* src, int bytes);
  __EXPORT int val_write(volatile void* dest, const void* src, int bytes);
- __EXPORT int write_otp(uint8_t id_type, uint32_t vid, uint32_t pid, char* signature);
- __EXPORT int lock_otp(void);
+ __EXPORT void write_otp(uint8_t id_type, uint32_t vid, uint32_t pid, char* signature);
+ __EXPORT void lock_otp(void);
  
  
  __EXPORT uint8_t F_write_byte(uint32_t Address, uint8_t Data);
- __EXPORT uint8_t F_write_word(uint32_t Address, uint32_t Data);
+ __EXPORT void F_write_word(uint32_t Address, uint32_t Data);
       
 __END_DECLS
 
