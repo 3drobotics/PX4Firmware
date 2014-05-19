@@ -154,8 +154,9 @@ ETSAirspeed::collect()
 		return ret;
 	}
 
-	uint16_t diff_pres_pa = val[1] << 8 | val[0];
-        if (diff_pres_pa == 0) {
+	uint16_t diff_pres_pa_raw = val[1] << 8 | val[0];
+	uint16_t diff_pres_pa;
+        if (diff_pres_pa_raw == 0) {
 		// a zero value means the pressure sensor cannot give us a
 		// value. We need to return, and not report a value or the
 		// caller could end up using this value as part of an
@@ -165,10 +166,10 @@ ETSAirspeed::collect()
 		return -1;
         }
 
-	if (diff_pres_pa < _diff_pres_offset + MIN_ACCURATE_DIFF_PRES_PA) {
+	if (diff_pres_pa_raw < _diff_pres_offset + MIN_ACCURATE_DIFF_PRES_PA) {
 		diff_pres_pa = 0;
 	} else {
-		diff_pres_pa -= _diff_pres_offset;
+		diff_pres_pa = diff_pres_pa_raw - _diff_pres_offset;
 	}
 
 	// Track maximum differential pressure measured (so we can work out top speed).
@@ -181,6 +182,7 @@ ETSAirspeed::collect()
 	report.timestamp = hrt_absolute_time();
         report.error_count = perf_event_count(_comms_errors);
 	report.differential_pressure_pa = (float)diff_pres_pa;
+	report.differential_pressure_raw_pa = (float)diff_pres_pa_raw;
 	report.voltage = 0;
 	report.max_differential_pressure_pa = _max_differential_pressure_pa;
 
