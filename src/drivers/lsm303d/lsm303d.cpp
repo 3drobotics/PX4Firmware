@@ -2018,6 +2018,7 @@ lsm303d_usage()
 	warnx("missing command: try 'start', 'info', 'test', 'reset', 'regdump', 'logging'");
 	warnx("options:");
 	warnx("    -X    (external bus)");
+	warnx("    -R rotation");
 }
 
 int
