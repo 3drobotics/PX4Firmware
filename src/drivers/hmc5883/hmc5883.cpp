@@ -1251,7 +1251,7 @@ const int ERROR = -1;
 
 HMC5883	*g_dev;
 
-void	start(enum Rotation rotation);
+void	start(int bus, enum Rotation rotation);
 void	test();
 void	reset();
 void	info();
@@ -1261,7 +1261,7 @@ int	calibrate();
  * Start the driver.
  */
 void
-start(enum Rotation rotation)
+start(int bus, enum Rotation rotation)
 {
 	int fd;
 
@@ -1270,16 +1270,18 @@ start(enum Rotation rotation)
 		errx(0, "already started");
 
 	/* create the driver, attempt expansion bus first */
-	g_dev = new HMC5883(PX4_I2C_BUS_EXPANSION, rotation);
-	if (g_dev != nullptr && OK != g_dev->init()) {
-		delete g_dev;
-		g_dev = nullptr;
+	if (bus == -1 || bus == PX4_I2C_BUS_EXPANSION) {
+		g_dev = new HMC5883(PX4_I2C_BUS_EXPANSION, rotation);
+		if (g_dev != nullptr && OK != g_dev->init()) {
+			delete g_dev;
+			g_dev = nullptr;
+		}
 	}
 			
 
 #ifdef PX4_I2C_BUS_ONBOARD
 	/* if this failed, attempt onboard sensor */
-	if (g_dev == nullptr) {
+	if (g_dev == nullptr && (bus == -1 || bus == PX4_I2C_BUS_ONBOARD)) {
 		g_dev = new HMC5883(PX4_I2C_BUS_ONBOARD, rotation);
 		if (g_dev != nullptr && OK != g_dev->init()) {
 			goto fail;
@@ -1485,18 +1487,31 @@ hmc5883_usage()
 	warnx("missing command: try 'start', 'info', 'test', 'reset', 'info', 'calibrate'");
 	warnx("options:");
 	warnx("    -R rotation");
+	warnx("    -X only external bus");
+#ifdef PX4_I2C_BUS_ONBOARD
+	warnx("    -I only internal bus");
+#endif
 }
 
 int
 hmc5883_main(int argc, char *argv[])
 {
 	int ch;
+	int bus = -1;
 	enum Rotation rotation = ROTATION_NONE;
 
-	while ((ch = getopt(argc, argv, "R:")) != EOF) {
+	while ((ch = getopt(argc, argv, "XIR:")) != EOF) {
 		switch (ch) {
 		case 'R':
 			rotation = (enum Rotation)atoi(optarg);
+			break;
+#ifdef PX4_I2C_BUS_ONBOARD
+		case 'I':
+			bus = PX4_I2C_BUS_ONBOARD;
+			break;
+#endif
+		case 'X':
+			bus = PX4_I2C_BUS_EXPANSION;
 			break;
 		default:
 			hmc5883_usage();
@@ -1508,7 +1523,7 @@ hmc5883_main(int argc, char *argv[])
 	 * Start/load the driver.
 	 */
 	if (!strcmp(argv[1], "start"))
-		hmc5883::start(rotation);
+		hmc5883::start(bus, rotation);
 
 	/*
 	 * Test the driver/device.
