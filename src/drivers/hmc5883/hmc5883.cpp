@@ -1514,6 +1514,7 @@ hmc5883_usage()
 	warnx("missing command: try 'start', 'info', 'test', 'reset', 'info', 'calibrate'");
 	warnx("options:");
 	warnx("    -R rotation");
+	warnx("    -C calibrate on start");
 	warnx("    -X only external bus");
 #ifdef PX4_I2C_BUS_ONBOARD
 	warnx("    -I only internal bus");
@@ -1526,8 +1527,9 @@ hmc5883_main(int argc, char *argv[])
 	int ch;
 	int bus = -1;
 	enum Rotation rotation = ROTATION_NONE;
+        bool calibrate = false;
 
-	while ((ch = getopt(argc, argv, "XIR:")) != EOF) {
+	while ((ch = getopt(argc, argv, "XIR:C")) != EOF) {
 		switch (ch) {
 		case 'R':
 			rotation = (enum Rotation)atoi(optarg);
@@ -1540,40 +1542,54 @@ hmc5883_main(int argc, char *argv[])
 		case 'X':
 			bus = PX4_I2C_BUS_EXPANSION;
 			break;
+		case 'C':
+			calibrate = true;
+			break;
 		default:
 			hmc5883_usage();
 			exit(0);
 		}
 	}
 
+	const char *verb = argv[optind];	
+
 	/*
 	 * Start/load the driver.
 	 */
-	if (!strcmp(argv[1], "start"))
+	if (!strcmp(verb, "start")) {
 		hmc5883::start(bus, rotation);
+		if (calibrate) {
+			if (hmc5883::calibrate(bus) == 0) {
+				errx(0, "calibration successful");
+				
+			} else {
+				errx(1, "calibration failed");
+			}
+		}
+	}
 
 	/*
 	 * Test the driver/device.
 	 */
-	if (!strcmp(argv[1], "test"))
+	if (!strcmp(verb, "test"))
 		hmc5883::test(bus);
 
 	/*
 	 * Reset the driver.
 	 */
-	if (!strcmp(argv[1], "reset"))
+	if (!strcmp(verb, "reset"))
 		hmc5883::reset(bus);
 
 	/*
 	 * Print driver information.
 	 */
-	if (!strcmp(argv[1], "info") || !strcmp(argv[1], "status"))
+	if (!strcmp(verb, "info") || !strcmp(verb, "status"))
 		hmc5883::info(bus);
 
 	/*
 	 * Autocalibrate the scaling
 	 */
-	if (!strcmp(argv[1], "calibrate")) {
+	if (!strcmp(verb, "calibrate")) {
 		if (hmc5883::calibrate(bus) == 0) {
 			errx(0, "calibration successful");
 
