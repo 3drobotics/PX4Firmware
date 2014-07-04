@@ -1621,6 +1621,7 @@ mpu6000_usage()
 	warnx("missing command: try 'start', 'info', 'test', 'reset'");
 	warnx("options:");
 	warnx("    -X    (external bus)");
+	warnx("    -R rotation");
 }
 
 int
