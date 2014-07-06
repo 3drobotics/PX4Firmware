@@ -328,8 +328,8 @@ HMC5883::HMC5883(int bus, const char *path, enum Rotation rotation) :
 	_reports(nullptr),
 	_range_scale(0), /* default range scale from counts to gauss */
 	_range_ga(1.3f),
-	_mag_topic(-1),
 	_class_instance(-1),
+	_mag_topic(-1),
 	_sample_perf(perf_alloc(PC_ELAPSED, "hmc5883_read")),
 	_comms_errors(perf_alloc(PC_COUNT, "hmc5883_comms_errors")),
 	_buffer_overflows(perf_alloc(PC_COUNT, "hmc5883_buffer_overflows")),
@@ -1253,10 +1253,11 @@ const int ERROR = -1;
 HMC5883	*g_dev_int;
 HMC5883	*g_dev_ext;
 
+void	hmc5883_usage();
 void	start(int bus, enum Rotation rotation);
 void	test(int bus);
 void	reset(int bus);
-void	info();
+void	info(int bus);
 int	calibrate(int bus);
 
 /**
