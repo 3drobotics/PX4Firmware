@@ -157,6 +157,8 @@ private:
 	mag_scale		_scale;
 	float 			_range_scale;
 	float 			_range_ga;
+	uint8_t			_range_bits;
+	uint8_t			_conf_reg;
 	bool			_collect_phase;
 	int			_class_instance;
 
@@ -165,6 +167,8 @@ private:
 	perf_counter_t		_sample_perf;
 	perf_counter_t		_comms_errors;
 	perf_counter_t		_buffer_overflows;
+	perf_counter_t		_range_errors;
+	perf_counter_t		_conf_errors;
 
 	/* status reporting */
 	bool			_sensor_ok;		/**< sensor was found and reports ok */
@@ -231,6 +235,23 @@ private:
 	 * Sets the internal range to handle at least the argument in Gauss.
 	 */
 	int 			set_range(unsigned range);
+
+	/**
+	 * check the sensor range.
+	 *
+	 * checks that the range of the sensor is correctly set, to
+	 * cope with communication errors causing the range to change
+	 */
+	void 			check_range(void);
+
+	/**
+	 * check the sensor configuration.
+	 *
+	 * checks that the config of the sensor is correctly set, to
+	 * cope with communication errors causing the configuration to
+	 * change
+	 */
+	void 			check_conf(void);
 
 	/**
 	 * Perform a poll cycle; collect from the previous measurement
@@ -328,11 +349,15 @@ HMC5883::HMC5883(int bus, const char *path, enum Rotation rotation) :
 	_reports(nullptr),
 	_range_scale(0), /* default range scale from counts to gauss */
 	_range_ga(1.3f),
+	_range_bits(0),
+	_conf_reg(0),
 	_class_instance(-1),
 	_mag_topic(-1),
 	_sample_perf(perf_alloc(PC_ELAPSED, "hmc5883_read")),
 	_comms_errors(perf_alloc(PC_COUNT, "hmc5883_comms_errors")),
 	_buffer_overflows(perf_alloc(PC_COUNT, "hmc5883_buffer_overflows")),
+	_range_errors(perf_alloc(PC_COUNT, "hmc5883_range_errors")),
+	_conf_errors(perf_alloc(PC_COUNT, "hmc5883_conf_errors")),
 	_sensor_ok(false),
 	_calibrated(false),
 	_bus(bus),
@@ -370,6 +395,8 @@ HMC5883::~HMC5883()
 	perf_free(_sample_perf);
 	perf_free(_comms_errors);
 	perf_free(_buffer_overflows);
+	perf_free(_range_errors);
+	perf_free(_conf_errors);
 }
 
 int
@@ -400,45 +427,43 @@ out:
 
 int HMC5883::set_range(unsigned range)
 {
-	uint8_t range_bits;
-
 	if (range < 1) {
-		range_bits = 0x00;
+		_range_bits = 0x00;
 		_range_scale = 1.0f / 1370.0f;
 		_range_ga = 0.88f;
 
 	} else if (range <= 1) {
-		range_bits = 0x01;
+		_range_bits = 0x01;
 		_range_scale = 1.0f / 1090.0f;
 		_range_ga = 1.3f;
 
 	} else if (range <= 2) {
-		range_bits = 0x02;
+		_range_bits = 0x02;
 		_range_scale = 1.0f / 820.0f;
 		_range_ga = 1.9f;
 
 	} else if (range <= 3) {
-		range_bits = 0x03;
+		_range_bits = 0x03;
 		_range_scale = 1.0f / 660.0f;
 		_range_ga = 2.5f;
 
 	} else if (range <= 4) {
-		range_bits = 0x04;
+		_range_bits = 0x04;
 		_range_scale = 1.0f / 440.0f;
 		_range_ga = 4.0f;
 
 	} else if (range <= 4.7f) {
-		range_bits = 0x05;
+		_range_bits = 0x05;
 		_range_scale = 1.0f / 390.0f;
 		_range_ga = 4.7f;
 
 	} else if (range <= 5.6f) {
-		range_bits = 0x06;
+		_range_bits = 0x06;
 		_range_scale = 1.0f / 330.0f;
 		_range_ga = 5.6f;
 
 	} else {
-		range_bits = 0x07;
+		_range_bits = 0x07;
 		_range_scale = 1.0f / 230.0f;
 		_range_ga = 8.1f;
 	}
@@ -448,7 +473,7 @@ int HMC5883::set_range(unsigned range)
 	/*
 	 * Send the command to set the range
 	 */
-	ret = write_reg(ADDR_CONF_B, (range_bits << 5));
+	ret = write_reg(ADDR_CONF_B, (_range_bits << 5));
 
 	if (OK != ret)
 		perf_count(_comms_errors);
@@ -459,7 +484,53 @@ int HMC5883::set_range(unsigned range)
 	if (OK != ret)
 		perf_count(_comms_errors);
 
-	return !(range_bits_in == (range_bits << 5));
+	return !(range_bits_in == (_range_bits << 5));
+}
+
+/**
+   check that the range register has the right value. This is done
+   periodically to cope with I2C bus noise causing the range of the
+   compass changing.
+ */
+void HMC5883::check_range(void)
+{
+	int ret;
+
+	uint8_t range_bits_in;
+	ret = read_reg(ADDR_CONF_B, range_bits_in);
+	if (OK != ret) {
+		perf_count(_comms_errors);
+		return;
+	}
+	if (range_bits_in != (_range_bits<<5)) {
+		perf_count(_range_errors);
+		ret = write_reg(ADDR_CONF_B, (_range_bits << 5));
+		if (OK != ret)
+			perf_count(_comms_errors);
+	}
+}
+
+/**
+   check that the configuration register has the right value. This is
+   done periodically to cope with I2C bus noise causing the
+   configuration of the compass to change.
+ */
+void HMC5883::check_conf(void)
+{
+	int ret;
+
+	uint8_t conf_reg_in;
+	ret = read_reg(ADDR_CONF_A, conf_reg_in);
+	if (OK != ret) {
+		perf_count(_comms_errors);
+		return;
+	}
+	if (conf_reg_in != _conf_reg) {
+		perf_count(_conf_errors);
+		ret = write_reg(ADDR_CONF_A, _conf_reg);
+		if (OK != ret)
+			perf_count(_comms_errors);
+	}
 }
 
 int
@@ -793,7 +864,7 @@ HMC5883::collect()
 	} report;
 	int	ret = -EIO;
 	uint8_t	cmd;
-
+	uint8_t check_counter;
 
 	perf_begin(_sample_perf);
 	struct mag_report new_report;
@@ -891,6 +962,21 @@ HMC5883::collect()
 
 	/* notify anyone waiting for data */
 	poll_notify(POLLIN);
+
+	/*
+	  periodically check the range register and configuration
+	  registers. With a bad I2C cable it is possible for the
+	  registers to become corrupt, leading to bad readings. It
+	  doesn't happen often, but given the poor cables some
+	  vehicles have it is worth checking for.
+	 */
+	check_counter = perf_event_count(_sample_perf) % 256;
+	if (check_counter == 0) {
+		check_range();
+	}
+	if (check_counter == 128) {
+		check_conf();
+	}
 
 	ret = OK;
 
@@ -1166,25 +1252,24 @@ int HMC5883::set_excitement(unsigned enable)
 {
 	int ret;
 	/* arm the excitement strap */
-	uint8_t conf_reg;
-	ret = read_reg(ADDR_CONF_A, conf_reg);
+	ret = read_reg(ADDR_CONF_A, _conf_reg);
 
 	if (OK != ret)
 		perf_count(_comms_errors);
 
 	if (((int)enable) < 0) {
-		conf_reg |= 0x01;
+		_conf_reg |= 0x01;
 
 	} else if (enable > 0) {
-		conf_reg |= 0x02;
+		_conf_reg |= 0x02;
 
 	} else {
-		conf_reg &= ~0x03;
+		_conf_reg &= ~0x03;
 	}
 
-        // ::printf("set_excitement enable=%d regA=0x%x\n", (int)enable, (unsigned)conf_reg);
+        // ::printf("set_excitement enable=%d regA=0x%x\n", (int)enable, (unsigned)_conf_reg);
 
-	ret = write_reg(ADDR_CONF_A, conf_reg);
+	ret = write_reg(ADDR_CONF_A, _conf_reg);
 
 	if (OK != ret)
 		perf_count(_comms_errors);
@@ -1194,7 +1279,7 @@ int HMC5883::set_excitement(unsigned enable)
 
 	//print_info();
 
-	return !(conf_reg == conf_reg_ret);
+	return !(_conf_reg == conf_reg_ret);
 }
 
 int
