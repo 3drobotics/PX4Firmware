@@ -81,7 +81,7 @@
 #define PX4FLOW_REG			0x16	///< Measure Register 22
 
 #define PX4FLOW_CONVERSION_INTERVAL	20000	///< in microseconds! 20000 = 50 Hz 100000 = 10Hz
-#define PX4FLOW_I2C_MAX_BUS_SPEED	400000	///< 400 KHz maximum speed
+#define PX4FLOW_I2C_MAX_BUS_SPEED	100000	///< 100 KHz maximum speed
 
 /* oddly, ERROR is not defined for c++ */
 #ifdef ERROR
