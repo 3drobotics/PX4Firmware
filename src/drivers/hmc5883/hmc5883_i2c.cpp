@@ -89,7 +89,7 @@ HMC5883_I2C_interface(int bus)
 }
 
 HMC5883_I2C::HMC5883_I2C(int bus) :
-	I2C("HMC5883_I2C", nullptr, bus, HMC5883L_ADDRESS, 400000)
+	I2C("HMC5883_I2C", nullptr, bus, HMC5883L_ADDRESS, 100000)
 {
 	_device_id.devid_s.devtype = DRV_MAG_DEVTYPE_HMC5883;
 }
