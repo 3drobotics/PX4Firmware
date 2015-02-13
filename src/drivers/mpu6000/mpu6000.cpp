@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -175,6 +175,12 @@
 
 #define MPU6000_ONE_G					9.80665f
 
+#ifdef PX4_SPI_BUS_EXT
+#define EXTERNAL_BUS PX4_SPI_BUS_EXT
+#else
+#define EXTERNAL_BUS 0
+#endif
+
 /*
   the MPU6000 can only handle high SPI bus speeds on the sensor and
   interrupt status registers. All other registers have a maximum 1MHz
@@ -234,7 +240,7 @@ private:
 	float			_accel_range_scale;
 	float			_accel_range_m_s2;
 	orb_advert_t		_accel_topic;
-	orb_id_t		_accel_orb_id;
+	int			_accel_orb_class_instance;
 	int			_accel_class_instance;
 
 	RingBuffer		*_gyro_reports;
@@ -251,6 +257,8 @@ private:
 	perf_counter_t		_bad_registers;
 	perf_counter_t		_good_transfers;
 	perf_counter_t		_reset_retries;
+	perf_counter_t		_system_latency_perf;
+	perf_counter_t		_controller_latency_perf;
 
 	uint8_t			_register_wait;
 	uint64_t		_reset_wait;
@@ -359,6 +367,13 @@ private:
 	uint16_t		swap16(uint16_t val) { return (val >> 8) | (val << 8);	}
 
 	/**
+	 * Get the internal / external state
+	 *
+	 * @return true if the sensor is not on the main MCU board
+	 */
+	bool			is_external() { return (_bus == EXTERNAL_BUS); }
+
+	/**
 	 * Measurement self test
 	 *
 	 * @return 0 on success, 1 on failure
@@ -387,7 +402,7 @@ private:
 	/*
 	  set sample rate (approximate) - 1kHz to 5Hz
 	*/
-	void _set_sample_rate(uint16_t desired_sample_rate_hz);
+	void _set_sample_rate(unsigned desired_sample_rate_hz);
 
 	/*
 	  check that key registers still have the right value
@@ -431,7 +446,7 @@ const uint8_t MPU6000::_checked_registers[MPU6000_NUM_CHECKED_REGISTERS] = { MPU
 									     MPUREG_INT_ENABLE,
 									     MPUREG_INT_PIN_CFG };
 
-					   
+
 
 /**
  * Helper class implementing the gyro driver node.
@@ -455,7 +470,7 @@ protected:
 private:
 	MPU6000			*_parent;
 	orb_advert_t		_gyro_topic;
-	orb_id_t		_gyro_orb_id;
+	int			_gyro_orb_class_instance;
 	int			_gyro_class_instance;
 
 	/* do not allow to copy this class due to pointer data members */
@@ -477,7 +492,7 @@ MPU6000::MPU6000(int bus, const char *path_accel, const char *path_gyro, spi_dev
 	_accel_range_scale(0.0f),
 	_accel_range_m_s2(0.0f),
 	_accel_topic(-1),
-	_accel_orb_id(nullptr),
+	_accel_orb_class_instance(-1),
 	_accel_class_instance(-1),
 	_gyro_reports(nullptr),
 	_gyro_scale{},
@@ -491,6 +506,8 @@ MPU6000::MPU6000(int bus, const char *path_accel, const char *path_gyro, spi_dev
 	_bad_registers(perf_alloc(PC_COUNT, "mpu6000_bad_registers")),
 	_good_transfers(perf_alloc(PC_COUNT, "mpu6000_good_transfers")),
 	_reset_retries(perf_alloc(PC_COUNT, "mpu6000_reset_retries")),
+	_system_latency_perf(perf_alloc_once(PC_ELAPSED, "sys_latency")),
+	_controller_latency_perf(perf_alloc_once(PC_ELAPSED, "ctrl_latency")),
 	_register_wait(0),
 	_reset_wait(0),
 	_accel_filter_x(MPU6000_ACCEL_DEFAULT_RATE, MPU6000_ACCEL_DEFAULT_DRIVER_FILTER_FREQ),
@@ -505,6 +522,12 @@ MPU6000::MPU6000(int bus, const char *path_accel, const char *path_gyro, spi_dev
 {
 	// disable debug() calls
 	_debug_enabled = false;
+
+	_device_id.devid_s.devtype = DRV_ACC_DEVTYPE_MPU6000;
+
+	/* Prime _gyro with parents devid. */
+	_gyro->_device_id.devid = _device_id.devid;
+	_gyro->_device_id.devid_s.devtype = DRV_GYR_DEVTYPE_MPU6000;
 
 	// default accel scale factors
 	_accel_scale.x_offset = 0;
@@ -540,7 +563,7 @@ MPU6000::~MPU6000()
 		delete _gyro_reports;
 
 	if (_accel_class_instance != -1)
-		unregister_class_devname(ACCEL_DEVICE_PATH, _accel_class_instance);
+		unregister_class_devname(ACCEL_BASE_DEVICE_PATH, _accel_class_instance);
 
 	/* delete the perf counter */
 	perf_free(_sample_perf);
@@ -592,6 +615,7 @@ MPU6000::init()
 	_gyro_scale.z_offset = 0;
 	_gyro_scale.z_scale  = 1.0f;
 
+
 	/* do CDev init for the gyro device node, keep it optional */
 	ret = _gyro->init();
 	/* if probe/setup failed, bail now */
@@ -600,7 +624,7 @@ MPU6000::init()
 		return ret;
 	}
 
-	_accel_class_instance = register_class_devname(ACCEL_DEVICE_PATH);
+	_accel_class_instance = register_class_devname(ACCEL_BASE_DEVICE_PATH);
 
 	measure();
 
@@ -609,22 +633,8 @@ MPU6000::init()
 	_accel_reports->get(&arp);
 
 	/* measurement will have generated a report, publish */
-	switch (_accel_class_instance) {
-		case CLASS_DEVICE_PRIMARY:
-			_accel_orb_id = ORB_ID(sensor_accel0);
-			break;
-		
-		case CLASS_DEVICE_SECONDARY:
-			_accel_orb_id = ORB_ID(sensor_accel1);
-			break;
-
-		case CLASS_DEVICE_TERTIARY:
-			_accel_orb_id = ORB_ID(sensor_accel2);
-			break;
-
-	}
-
-	_accel_topic = orb_advertise(_accel_orb_id, &arp);
+	_accel_topic = orb_advertise_multi(ORB_ID(sensor_accel), &arp,
+		&_accel_orb_class_instance, (is_external()) ? ORB_PRIO_MAX : ORB_PRIO_HIGH);
 
 	if (_accel_topic < 0) {
 		warnx("ADVERT FAIL");
@@ -635,22 +645,8 @@ MPU6000::init()
 	struct gyro_report grp;
 	_gyro_reports->get(&grp);
 
-	switch (_gyro->_gyro_class_instance) {
-		case CLASS_DEVICE_PRIMARY:
-			_gyro->_gyro_orb_id = ORB_ID(sensor_gyro0);
-			break;
-
-		case CLASS_DEVICE_SECONDARY:
-			_gyro->_gyro_orb_id = ORB_ID(sensor_gyro1);
-			break;
-
-		case CLASS_DEVICE_TERTIARY:
-			_gyro->_gyro_orb_id = ORB_ID(sensor_gyro2);
-			break;
-
-	}
-
-	_gyro->_gyro_topic = orb_advertise(_gyro->_gyro_orb_id, &grp);
+	_gyro->_gyro_topic = orb_advertise_multi(ORB_ID(sensor_gyro), &grp,
+		&_gyro->_gyro_orb_class_instance, (is_external()) ? ORB_PRIO_MAX : ORB_PRIO_HIGH);
 
 	if (_gyro->_gyro_topic < 0) {
 		warnx("ADVERT FAIL");
@@ -679,7 +675,7 @@ int MPU6000::reset()
 		// for it to come out of sleep
 		write_checked_reg(MPUREG_PWR_MGMT_1, MPU_CLK_SEL_PLLGYROZ);
 		up_udelay(1000);
-		
+
 		// Disable I2C bus (recommended on datasheet)
 		write_checked_reg(MPUREG_USER_CTRL, BIT_I2C_IF_DIS);
 		irqrestore(state);
@@ -737,7 +733,7 @@ int MPU6000::reset()
 	case MPU6000_REV_D9:
 	case MPU6000_REV_D10:
 	// default case to cope with new chip revisions, which
-	// presumably won't have the accel scaling bug		
+	// presumably won't have the accel scaling bug
 	default:
 		// Accel scale 8g (4096 LSB/g)
 		write_checked_reg(MPUREG_ACCEL_CONFIG, 2 << 3);
@@ -798,13 +794,19 @@ MPU6000::probe()
   set sample rate (approximate) - 1kHz to 5Hz, for both accel and gyro
 */
 void
-MPU6000::_set_sample_rate(uint16_t desired_sample_rate_hz)
+MPU6000::_set_sample_rate(unsigned desired_sample_rate_hz)
 {
-  uint8_t div = 1000 / desired_sample_rate_hz;
-  if(div>200) div=200;
-  if(div<1) div=1;
-  write_checked_reg(MPUREG_SMPLRT_DIV, div-1);
-  _sample_rate = 1000 / div;
+	if (desired_sample_rate_hz == 0 ||
+			desired_sample_rate_hz == GYRO_SAMPLERATE_DEFAULT ||
+			desired_sample_rate_hz == ACCEL_SAMPLERATE_DEFAULT) {
+		desired_sample_rate_hz = MPU6000_GYRO_DEFAULT_RATE;
+	}
+
+	uint8_t div = 1000 / desired_sample_rate_hz;
+	if(div>200) div=200;
+	if(div<1) div=1;
+	write_checked_reg(MPUREG_SMPLRT_DIV, div-1);
+	_sample_rate = 1000 / div;
 }
 
 /*
@@ -815,7 +817,7 @@ MPU6000::_set_dlpf_filter(uint16_t frequency_hz)
 {
 	uint8_t filter;
 
-	/* 
+	/*
 	   choose next highest filter frequency available
 	 */
         if (frequency_hz == 0) {
@@ -917,24 +919,48 @@ MPU6000::gyro_self_test()
 	if (self_test())
 		return 1;
 
-	/* evaluate gyro offsets, complain if offset -> zero or larger than 6 dps */
-	if (fabsf(_gyro_scale.x_offset) > 0.1f || fabsf(_gyro_scale.x_offset) < 0.000001f)
-		return 1;
-	if (fabsf(_gyro_scale.x_scale - 1.0f) > 0.3f)
+	/*
+	 * Maximum deviation of 20 degrees, according to
+	 * http://www.invensense.com/mems/gyro/documents/PS-MPU-6000A-00v3.4.pdf
+	 * Section 6.1, initial ZRO tolerance
+	 */
+	const float max_offset = 0.34f;
+	/* 30% scale error is chosen to catch completely faulty units but
+	 * to let some slight scale error pass. Requires a rate table or correlation
+	 * with mag rotations + data fit to
+	 * calibrate properly and is not done by default.
+	 */
+	const float max_scale = 0.3f;
+
+	/* evaluate gyro offsets, complain if offset -> zero or larger than 20 dps. */
+	if (fabsf(_gyro_scale.x_offset) > max_offset)
 		return 1;
 
-	if (fabsf(_gyro_scale.y_offset) > 0.1f || fabsf(_gyro_scale.y_offset) < 0.000001f)
-		return 1;
-	if (fabsf(_gyro_scale.y_scale - 1.0f) > 0.3f)
+	/* evaluate gyro scale, complain if off by more than 30% */
+	if (fabsf(_gyro_scale.x_scale - 1.0f) > max_scale)
 		return 1;
 
-	if (fabsf(_gyro_scale.z_offset) > 0.1f || fabsf(_gyro_scale.z_offset) < 0.000001f)
+	if (fabsf(_gyro_scale.y_offset) > max_offset)
 		return 1;
-	if (fabsf(_gyro_scale.z_scale - 1.0f) > 0.3f)
+	if (fabsf(_gyro_scale.y_scale - 1.0f) > max_scale)
 		return 1;
+
+	if (fabsf(_gyro_scale.z_offset) > max_offset)
+		return 1;
+	if (fabsf(_gyro_scale.z_scale - 1.0f) > max_scale)
+		return 1;
+
+	/* check if all scales are zero */
+	if ((fabsf(_gyro_scale.x_offset) < 0.000001f) &&
+		(fabsf(_gyro_scale.y_offset) < 0.000001f) &&
+		(fabsf(_gyro_scale.z_offset) < 0.000001f)) {
+		/* if all are zero, this device is not calibrated */
+		return 1;
+	}
 
 	return 0;
 }
+
 
 
 /*
@@ -954,7 +980,7 @@ MPU6000::factory_self_test()
 	// gyro self test has to be done at 250DPS
 	write_reg(MPUREG_GYRO_CONFIG, BITS_FS_250DPS);
 
-	struct MPUReport mpu_report;	
+	struct MPUReport mpu_report;
 	float accel_baseline[3];
 	float gyro_baseline[3];
 	float accel[3];
@@ -984,10 +1010,10 @@ MPU6000::factory_self_test()
 	}
 
 #if 1
-	write_reg(MPUREG_GYRO_CONFIG, 
-		  BITS_FS_250DPS | 
-		  BITS_GYRO_ST_X | 
-		  BITS_GYRO_ST_Y | 
+	write_reg(MPUREG_GYRO_CONFIG,
+		  BITS_FS_250DPS |
+		  BITS_GYRO_ST_X |
+		  BITS_GYRO_ST_Y |
 		  BITS_GYRO_ST_Z);
 
 	// accel 8g, self-test enabled all axes
@@ -1057,7 +1083,7 @@ MPU6000::factory_self_test()
 			::printf("FAIL\n");
 			ret = -EIO;
 		}
-	}	
+	}
 	for (uint8_t i=0; i<3; i++) {
 		float diff = gyro[i]-gyro_baseline[i];
 		float err = 100*(diff - gyro_ftrim[i]) / gyro_ftrim[i];
@@ -1072,7 +1098,7 @@ MPU6000::factory_self_test()
 			::printf("FAIL\n");
 			ret = -EIO;
 		}
-	}	
+	}
 
 	write_reg(MPUREG_GYRO_CONFIG, saved_gyro_config);
 	write_reg(MPUREG_ACCEL_CONFIG, saved_accel_config);
@@ -1219,14 +1245,14 @@ MPU6000::ioctl(struct file *filp, int cmd, unsigned long arg)
 		/* lower bound is mandatory, upper bound is a sanity check */
 		if ((arg < 1) || (arg > 100))
 			return -EINVAL;
-		
+
 		irqstate_t flags = irqsave();
 		if (!_accel_reports->resize(arg)) {
 			irqrestore(flags);
 			return -ENOMEM;
 		}
 		irqrestore(flags);
-		
+
 		return OK;
 	}
 
@@ -1508,13 +1534,13 @@ MPU6000::check_registers(void)
 	  the data registers.
 	*/
 	uint8_t v;
-	if ((v=read_reg(_checked_registers[_checked_next], MPU6000_HIGH_BUS_SPEED)) != 
+	if ((v=read_reg(_checked_registers[_checked_next], MPU6000_HIGH_BUS_SPEED)) !=
 	    _checked_values[_checked_next]) {
 		/*
 		  if we get the wrong value then we know the SPI bus
 		  or sensor is very sick. We set _register_wait to 20
 		  and wait until we have seen 20 good values in a row
-		  before we consider the sensor to be OK again. 
+		  before we consider the sensor to be OK again.
 		 */
 		perf_count(_bad_registers);
 
@@ -1627,7 +1653,7 @@ MPU6000::measure()
 		_register_wait--;
 		return;
 	}
-	    
+
 
 	/*
 	 * Swap axes and negate y
@@ -1688,7 +1714,7 @@ MPU6000::measure()
 	float x_in_new = ((report.accel_x * _accel_range_scale) - _accel_scale.x_offset) * _accel_scale.x_scale;
 	float y_in_new = ((report.accel_y * _accel_range_scale) - _accel_scale.y_offset) * _accel_scale.y_scale;
 	float z_in_new = ((report.accel_z * _accel_range_scale) - _accel_scale.z_offset) * _accel_scale.z_scale;
-	
+
 	arb.x = _accel_filter_x.apply(x_in_new);
 	arb.y = _accel_filter_y.apply(y_in_new);
 	arb.z = _accel_filter_z.apply(z_in_new);
@@ -1709,7 +1735,7 @@ MPU6000::measure()
 	float x_gyro_in_new = ((report.gyro_x * _gyro_range_scale) - _gyro_scale.x_offset) * _gyro_scale.x_scale;
 	float y_gyro_in_new = ((report.gyro_y * _gyro_range_scale) - _gyro_scale.y_offset) * _gyro_scale.y_scale;
 	float z_gyro_in_new = ((report.gyro_z * _gyro_range_scale) - _gyro_scale.z_offset) * _gyro_scale.z_scale;
-	
+
 	grb.x = _gyro_filter_x.apply(x_gyro_in_new);
 	grb.y = _gyro_filter_y.apply(y_gyro_in_new);
 	grb.z = _gyro_filter_z.apply(z_gyro_in_new);
@@ -1731,13 +1757,16 @@ MPU6000::measure()
 	_gyro->parent_poll_notify();
 
 	if (!(_pub_blocked)) {
+		/* log the time of this report */
+		perf_begin(_controller_latency_perf);
+		perf_begin(_system_latency_perf);
 		/* publish it */
-		orb_publish(_accel_orb_id, _accel_topic, &arb);
+		orb_publish(ORB_ID(sensor_accel), _accel_topic, &arb);
 	}
 
 	if (!(_pub_blocked)) {
 		/* publish it */
-		orb_publish(_gyro->_gyro_orb_id, _gyro->_gyro_topic, &grb);
+		orb_publish(ORB_ID(sensor_gyro), _gyro->_gyro_topic, &grb);
 	}
 
 	/* stop measuring */
@@ -1760,7 +1789,7 @@ MPU6000::print_info()
         for (uint8_t i=0; i<MPU6000_NUM_CHECKED_REGISTERS; i++) {
             uint8_t v = read_reg(_checked_registers[i], MPU6000_HIGH_BUS_SPEED);
             if (v != _checked_values[i]) {
-                ::printf("reg %02x:%02x should be %02x\n", 
+                ::printf("reg %02x:%02x should be %02x\n",
                          (unsigned)_checked_registers[i],
                          (unsigned)v,
                          (unsigned)_checked_values[i]);
@@ -1787,7 +1816,7 @@ MPU6000_gyro::MPU6000_gyro(MPU6000 *parent, const char *path) :
 	CDev("MPU6000_gyro", path),
 	_parent(parent),
 	_gyro_topic(-1),
-	_gyro_orb_id(nullptr),
+	_gyro_orb_class_instance(-1),
 	_gyro_class_instance(-1)
 {
 }
@@ -1795,7 +1824,7 @@ MPU6000_gyro::MPU6000_gyro(MPU6000 *parent, const char *path) :
 MPU6000_gyro::~MPU6000_gyro()
 {
 	if (_gyro_class_instance != -1)
-		unregister_class_devname(GYRO_DEVICE_PATH, _gyro_class_instance);
+		unregister_class_devname(GYRO_BASE_DEVICE_PATH, _gyro_class_instance);
 }
 
 int
@@ -1812,7 +1841,7 @@ MPU6000_gyro::init()
 		return ret;
 	}
 
-	_gyro_class_instance = register_class_devname(GYRO_DEVICE_PATH);
+	_gyro_class_instance = register_class_devname(GYRO_BASE_DEVICE_PATH);
 
 	return ret;
 }
@@ -1832,7 +1861,14 @@ MPU6000_gyro::read(struct file *filp, char *buffer, size_t buflen)
 int
 MPU6000_gyro::ioctl(struct file *filp, int cmd, unsigned long arg)
 {
-	return _parent->gyro_ioctl(filp, cmd, arg);
+
+	switch (cmd) {
+		case DEVIOCGDEVICEID:
+			return (int)CDev::ioctl(filp, cmd, arg);
+			break;
+		default:
+			return _parent->gyro_ioctl(filp, cmd, arg);
+	}
 }
 
 /**

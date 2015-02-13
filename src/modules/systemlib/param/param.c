@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -70,9 +70,16 @@
 /**
  * Array of static parameter info.
  */
-extern char __param_start, __param_end;
-static const struct param_info_s	*param_info_base = (struct param_info_s *) &__param_start;
-static const struct param_info_s	*param_info_limit = (struct param_info_s *) &__param_end;
+#ifdef _UNIT_TEST
+	extern struct param_info_s	param_array[];
+	extern struct param_info_s	*param_info_base;
+	extern struct param_info_s	*param_info_limit;
+#else
+	extern char __param_start, __param_end;
+	static const struct param_info_s *param_info_base = (struct param_info_s *) &__param_start;
+	static const struct param_info_s *param_info_limit = (struct param_info_s *) &__param_end;
+#endif
+
 #define	param_info_count		((unsigned)(param_info_limit - param_info_base))
 
 /**
@@ -441,10 +448,11 @@ param_set(param_t param, const void *val)
 	return param_set_internal(param, val, false);
 }
 
-void
+int
 param_reset(param_t param)
 {
 	struct param_wbuf_s *s = NULL;
+	bool param_found = false;
 
 	param_lock();
 
@@ -458,12 +466,16 @@ param_reset(param_t param)
 			int pos = utarray_eltidx(param_values, s);
 			utarray_erase(param_values, pos, 1);
 		}
+
+		param_found = true;
 	}
 
 	param_unlock();
 
 	if (s != NULL)
 		param_notify_changes();
+
+	return (!param_found);
 }
 
 void
@@ -477,6 +489,38 @@ param_reset_all(void)
 
 	/* mark as reset / deleted */
 	param_values = NULL;
+
+	param_unlock();
+
+	param_notify_changes();
+}
+
+void
+param_reset_excludes(const char* excludes[], int num_excludes)
+{
+	param_lock();
+
+	param_t	param;
+
+	for (param = 0; handle_in_range(param); param++) {
+		const char* name = param_name(param);
+		bool exclude = false;
+
+		for (int index = 0; index < num_excludes; index ++) {
+			int len = strlen(excludes[index]);
+
+			if((excludes[index][len - 1] == '*'
+				&& strncmp(name, excludes[index], len - 1) == 0)
+				|| strcmp(name, excludes[index]) == 0) {
+				exclude = true;
+				break;
+			}
+		}
+
+		if(!exclude) {
+			param_reset(param);
+		}
+	}
 
 	param_unlock();
 

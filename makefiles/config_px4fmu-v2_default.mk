@@ -27,15 +27,15 @@ MODULES		+= drivers/l3gd20
 MODULES		+= drivers/hmc5883
 MODULES		+= drivers/ms5611
 MODULES		+= drivers/mb12xx
-# MODULES		+= drivers/sf0x
+MODULES		+= drivers/sf0x
 MODULES		+= drivers/ll40ls
-# MODULES		+= drivers/trone
+MODULES		+= drivers/trone
 MODULES		+= drivers/gps
 MODULES		+= drivers/hil
 MODULES		+= drivers/hott
 MODULES		+= drivers/hott/hott_telemetry
 MODULES		+= drivers/hott/hott_sensors
-# MODULES		+= drivers/blinkm
+MODULES		+= drivers/blinkm
 MODULES		+= drivers/airspeed
 MODULES		+= drivers/ets_airspeed
 MODULES		+= drivers/meas_airspeed
@@ -71,6 +71,7 @@ MODULES		+= modules/navigator
 MODULES		+= modules/mavlink
 MODULES		+= modules/gpio_led
 MODULES		+= modules/uavcan
+MODULES 	+= modules/land_detector
 
 #
 # Estimation modules (EKF/ SO3 / other filters)
@@ -115,11 +116,17 @@ MODULES		+= lib/geo
 MODULES		+= lib/geo_lookup
 MODULES		+= lib/conversion
 MODULES		+= lib/launchdetection
+MODULES		+= platforms/nuttx
 
 #
 # OBC challenge
 #
 MODULES		+= modules/bottle_drop
+
+#
+# PX4 flow estimator, good for indoors
+#
+MODULES		+= examples/flow_position_estimator
 
 #
 # Demo apps

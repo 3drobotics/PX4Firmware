@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -75,6 +75,10 @@
 #include <systemlib/circuit_breaker.h>
 
 #include <uORB/topics/actuator_controls.h>
+#include <uORB/topics/actuator_controls_0.h>
+#include <uORB/topics/actuator_controls_1.h>
+#include <uORB/topics/actuator_controls_2.h>
+#include <uORB/topics/actuator_controls_3.h>
 #include <uORB/topics/actuator_outputs.h>
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/safety.h>
@@ -260,9 +264,9 @@ private:
 
 	int			_mavlink_fd;		///< mavlink file descriptor.
 
-	perf_counter_t		_perf_update;		///<local performance counter for status updates
-	perf_counter_t		_perf_write;		///<local performance counter for PWM control writes
-	perf_counter_t		_perf_chan_count;	///<local performance counter for channel number changes
+	perf_counter_t		_perf_update;		///< local performance counter for status updates
+	perf_counter_t		_perf_write;		///< local performance counter for PWM control writes
+	perf_counter_t		_perf_sample_latency;	///< total system latency (based on passed-through timestamp)
 
 	/* cached IO state */
 	uint16_t		_status;		///< Various IO status flags
@@ -493,7 +497,7 @@ PX4IO::PX4IO(device::Device *interface) :
 	_mavlink_fd(-1),
 	_perf_update(perf_alloc(PC_ELAPSED, "io update")),
 	_perf_write(perf_alloc(PC_ELAPSED, "io write")),
-	_perf_chan_count(perf_alloc(PC_COUNT, "io rc #")),
+	_perf_sample_latency(perf_alloc(PC_ELAPSED, "io latency")),
 	_status(0),
 	_alarms(0),
 	_t_actuator_controls_0(-1),
@@ -551,7 +555,7 @@ PX4IO::~PX4IO()
 	/* deallocate perfs */
 	perf_free(_perf_update);
 	perf_free(_perf_write);
-	perf_free(_perf_chan_count);
+	perf_free(_perf_sample_latency);
 
 	g_dev = nullptr;
 }
@@ -618,17 +622,22 @@ PX4IO::init()
 		return ret;
 
 	/* get some parameters */
-	unsigned protocol = io_reg_get(PX4IO_PAGE_CONFIG, PX4IO_P_CONFIG_PROTOCOL_VERSION);
+	unsigned protocol;
+	hrt_abstime start_try_time = hrt_absolute_time();
 
+	do {
+		usleep(2000);
+		protocol = io_reg_get(PX4IO_PAGE_CONFIG, PX4IO_P_CONFIG_PROTOCOL_VERSION);
+	} while (protocol == _io_reg_get_error && (hrt_elapsed_time(&start_try_time) < 700U * 1000U));
+
+	/* if the error still persists after timing out, we give up */
 	if (protocol == _io_reg_get_error) {
-		log("failed to communicate with IO");
-		mavlink_log_emergency(_mavlink_fd, "[IO] failed to communicate with IO, abort.");
+		mavlink_and_console_log_emergency(_mavlink_fd, "Failed to communicate with IO, abort.");
 		return -1;
 	}
 
 	if (protocol != PX4IO_PROTOCOL_VERSION) {
-		log("protocol/firmware mismatch");
-		mavlink_log_emergency(_mavlink_fd, "[IO] protocol/firmware mismatch, abort.");
+		mavlink_and_console_log_emergency(_mavlink_fd, "IO protocol/firmware mismatch, abort.");
 		return -1;
 	}
 
@@ -677,8 +686,7 @@ PX4IO::init()
 		/* get a status update from IO */
 		io_get_status();
 
-		mavlink_log_emergency(_mavlink_fd, "[IO] RECOVERING FROM FMU IN-AIR RESTART");
-		log("INAIR RESTART RECOVERY (needs commander app running)");
+		mavlink_and_console_log_emergency(_mavlink_fd, "RECOVERING FROM FMU IN-AIR RESTART");
 
 		/* WARNING: COMMANDER app/vehicle status must be initialized.
 		 * If this fails (or the app is not started), worst-case IO
@@ -707,7 +715,7 @@ PX4IO::init()
 
 			/* abort after 5s */
 			if ((hrt_absolute_time() - try_start_time) / 1000 > 3000) {
-				log("failed to recover from in-air restart (1), aborting IO driver init.");
+				mavlink_and_console_log_emergency(_mavlink_fd, "Failed to recover from in-air restart (1), abort");
 				return 1;
 			}
 
@@ -763,7 +771,7 @@ PX4IO::init()
 
 			/* abort after 5s */
 			if ((hrt_absolute_time() - try_start_time) / 1000 > 2000) {
-				log("failed to recover from in-air restart (2), aborting IO driver init.");
+				mavlink_and_console_log_emergency(_mavlink_fd, "Failed to recover from in-air restart (2), abort");
 				return 1;
 			}
 
@@ -805,8 +813,7 @@ PX4IO::init()
 			ret = io_set_rc_config();
 
 			if (ret != OK) {
-				log("failed to update RC input config");
-				mavlink_log_info(_mavlink_fd, "[IO] RC config upload fail");
+				mavlink_and_console_log_critical(_mavlink_fd, "IO RC config upload fail");
 				return ret;
 			}
 		}
@@ -823,7 +830,7 @@ PX4IO::init()
 	}
 
 	/* try to claim the generic PWM output device node as well - it's OK if we fail at this */
-	ret = register_driver(PWM_OUTPUT_DEVICE_PATH, &fops, 0666, (void *)this);
+	ret = register_driver(PWM_OUTPUT0_DEVICE_PATH, &fops, 0666, (void *)this);
 
 	if (ret == OK) {
 		log("default PWM output device");
@@ -834,7 +841,7 @@ PX4IO::init()
 	_task = task_spawn_cmd("px4io",
 					SCHED_DEFAULT,
 					SCHED_PRIORITY_ACTUATOR_OUTPUTS,
-					2000,
+					1800,
 					(main_t)&PX4IO::task_main_trampoline,
 					nullptr);
 
@@ -842,8 +849,6 @@ PX4IO::init()
 		debug("task start failed: %d", errno);
 		return -errno;
 	}
-
-	mavlink_log_info(_mavlink_fd, "[IO] init ok");
 
 	return OK;
 }
@@ -884,7 +889,7 @@ PX4IO::task_main()
 	    (_t_vehicle_control_mode < 0) ||
 	    (_t_param < 0) ||
 	    (_t_vehicle_command < 0)) {
-		log("subscription(s) failed");
+		warnx("subscription(s) failed");
 		goto out;
 	}
 
@@ -922,7 +927,7 @@ PX4IO::task_main()
 
 		/* this would be bad... */
 		if (ret < 0) {
-			log("poll error %d", errno);
+			warnx("poll error %d", errno);
 			continue;
 		}
 
@@ -1024,7 +1029,7 @@ PX4IO::task_main()
 				int pret = io_reg_set(PX4IO_PAGE_SETUP, PX4IO_P_SETUP_VBATT_SCALE, &scaling, 1);
 
 				if (pret != OK) {
-					log("vscale upload failed");
+					mavlink_and_console_log_critical(_mavlink_fd, "IO vscale upload failed");
 				}
 
 				/* send RC throttle failsafe value to IO */
@@ -1040,7 +1045,7 @@ PX4IO::task_main()
 						uint16_t failsafe_thr = failsafe_param_val;
 						pret = io_reg_set(PX4IO_PAGE_SETUP, PX4IO_P_SETUP_RC_THR_FAILSAFE_US, &failsafe_thr, 1);
 						if (pret != OK) {
-							log("failsafe upload failed, FS: %d us", (int)failsafe_thr);
+							mavlink_and_console_log_critical(_mavlink_fd, "failsafe upload failed, FS: %d us", (int)failsafe_thr);
 						}
 					}
 				}
@@ -1075,7 +1080,7 @@ out:
 
 	/* clean up the alternate device node */
 	if (_primary_pwm_device)
-		unregister_driver(PWM_OUTPUT_DEVICE_PATH);
+		unregister_driver(PWM_OUTPUT0_DEVICE_PATH);
 
 	/* tell the dtor that we are exiting */
 	_task = -1;
@@ -1102,7 +1107,7 @@ PX4IO::io_set_control_state(unsigned group)
 	uint16_t 		regs[_max_actuators];
 
 	/* get controls */
-	bool changed;
+	bool changed = false;
 
 	switch (group) {
 		case 0:
@@ -1111,6 +1116,7 @@ PX4IO::io_set_control_state(unsigned group)
 
 			if (changed) {
 				orb_copy(ORB_ID(actuator_controls_0), _t_actuator_controls_0, &controls);
+				perf_set(_perf_sample_latency, hrt_elapsed_time(&controls.timestamp_sample));
 			}
 		}
 		break;
@@ -1143,11 +1149,13 @@ PX4IO::io_set_control_state(unsigned group)
 		break;
 	}
 
-	if (!changed)
+	if (!changed) {
 		return -1;
+	}
 
-	for (unsigned i = 0; i < _max_controls; i++)
+	for (unsigned i = 0; i < _max_controls; i++) {
 		regs[i] = FLOAT_TO_REG(controls.control[i]);
+	}
 
 	/* copy values to registers in IO */
 	return io_reg_set(PX4IO_PAGE_CONTROLS, group * PX4IO_PROTOCOL_MAX_CONTROL_COUNT, regs, _max_controls);
@@ -1196,7 +1204,7 @@ PX4IO::io_set_arming_state()
 
 		if (armed.ready_to_arm) {
 			set |= PX4IO_P_SETUP_ARMING_IO_ARM_OK;
-			
+
 		} else {
 			clear |= PX4IO_P_SETUP_ARMING_IO_ARM_OK;
 		}
@@ -1348,7 +1356,7 @@ PX4IO::io_set_rc_config()
 
 		/* check the IO initialisation flag */
 		if (!(io_reg_get(PX4IO_PAGE_STATUS, PX4IO_P_STATUS_FLAGS) & PX4IO_P_STATUS_FLAGS_INIT_OK)) {
-			log("config for RC%d rejected by IO", i + 1);
+			mavlink_and_console_log_critical(_mavlink_fd, "config for RC%d rejected by IO", i + 1);
 			break;
 		}
 
@@ -1570,11 +1578,6 @@ PX4IO::io_get_raw_rc_input(rc_input_values &input_rc)
 		channel_count = RC_INPUT_MAX_CHANNELS;
 	}
 
-	/* count channel count changes to identify signal integrity issues */
-	if (channel_count != _rc_chan_count) {
-		perf_count(_perf_chan_count);
-	}
-
 	_rc_chan_count = channel_count;
 
 	input_rc.timestamp_publication = hrt_absolute_time();
@@ -1683,17 +1686,12 @@ PX4IO::io_publish_pwm_outputs()
 
 	/* lazily advertise on first publication */
 	if (_to_outputs == 0) {
-		_to_outputs = orb_advertise((_primary_pwm_device ?
-					     ORB_ID_VEHICLE_CONTROLS :
-					     ORB_ID(actuator_outputs_1)),
-					    &outputs);
+		int instance;
+		_to_outputs = orb_advertise_multi(ORB_ID(actuator_outputs),
+					    &outputs, &instance, ORB_PRIO_MAX);
 
 	} else {
-		orb_publish((_primary_pwm_device ?
-			     ORB_ID_VEHICLE_CONTROLS :
-			     ORB_ID(actuator_outputs_1)),
-			    _to_outputs,
-			    &outputs);
+		orb_publish(ORB_ID(actuator_outputs), _to_outputs, &outputs);
 	}
 
 	return OK;
@@ -1777,12 +1775,12 @@ PX4IO::print_debug()
 #ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
 	int io_fd = -1;
 
-	if (io_fd < 0) {
+	if (io_fd <= 0) {
 		io_fd = ::open("/dev/ttyS0", O_RDONLY | O_NONBLOCK | O_NOCTTY);
 	}
 
 	/* read IO's output */
-	if (io_fd > 0) {
+	if (io_fd >= 0) {
 		pollfd fds[1];
 		fds[0].fd = io_fd;
 		fds[0].events = POLLIN;
@@ -2282,6 +2280,7 @@ PX4IO::ioctl(file * filep, int cmd, unsigned long arg)
 
 	case PWM_SERVO_GET_DISABLE_LOCKDOWN:
 		*(unsigned *)arg = _lockdown_override;
+		break;
 
 	case PWM_SERVO_SET_FORCE_SAFETY_OFF:
 		/* force safety swith off */
@@ -2591,7 +2590,7 @@ PX4IO::ioctl(file * filep, int cmd, unsigned long arg)
 
 	case PWM_SERVO_SET_RC_CONFIG: {
 		/* enable setting of RC configuration without relying
-		   on param_get() 
+		   on param_get()
 		*/
 		struct pwm_output_rc_config* config = (struct pwm_output_rc_config*)arg;
 		if (config->channel >= RC_INPUT_MAX_CHANNELS) {
@@ -2857,10 +2856,10 @@ checkcrc(int argc, char *argv[])
 	}
 
 	if (ret != OK) {
-		printf("check CRC failed - %d\n", ret);
+		printf("[PX4IO::checkcrc] check CRC failed - %d\n", ret);
 		exit(1);
 	}
-	printf("CRCs match\n");
+	printf("[PX4IO::checkcrc] CRCs match\n");
 	exit(0);
 }
 
@@ -3007,11 +3006,14 @@ monitor(void)
 
 		fds[0].fd = 0;
 		fds[0].events = POLLIN;
-		poll(fds, 1, 2000);
+		if (poll(fds, 1, 2000) < 0) {
+			errx(1, "poll fail");
+		}
 
 		if (fds[0].revents == POLLIN) {
-			int c;
-			read(0, &c, 1);
+			/* control logic is to cancel with any key */
+			char c;
+			(void)read(0, &c, 1);
 
 			if (cancels-- == 0) {
 				printf("\033[2J\033[H"); /* move cursor home and clear screen */
@@ -3073,12 +3075,13 @@ lockdown(int argc, char *argv[])
 
 					if (ret > 0) {
 
-						read(0, &c, 1);
+						if (read(0, &c, 1) > 0) {
 
-						if (c != 'y') {
-							exit(0);
-						} else if (c == 'y') {
-							break;
+							if (c != 'y') {
+								exit(0);
+							} else if (c == 'y') {
+								break;
+							}
 						}
 					}
 
@@ -3241,7 +3244,13 @@ px4io_main(int argc, char *argv[])
 	if (!strcmp(argv[1], "limit")) {
 
 		if ((argc > 2)) {
-			g_dev->set_update_rate(atoi(argv[2]));
+			int limitrate = atoi(argv[2]);
+
+			if (limitrate > 0) {
+				g_dev->set_update_rate(limitrate);
+			} else {
+				errx(1, "invalid rate: %d", limitrate);
+			}
 
 		} else {
 			errx(1, "missing argument (50 - 500 Hz)");

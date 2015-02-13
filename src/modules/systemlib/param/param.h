@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -178,8 +178,9 @@ __EXPORT int		param_set(param_t param, const void *val);
  * to its default value.
  *
  * @param param		A handle returned by param_find or passed by param_foreach.
+ * @return		Zero on success, nonzero on failure
  */
-__EXPORT void		param_reset(param_t param);
+__EXPORT int		param_reset(param_t param);
 
 /**
  * Reset all parameters to their default values.
@@ -187,6 +188,18 @@ __EXPORT void		param_reset(param_t param);
  * This function also releases the storage used by struct parameters.
  */
 __EXPORT void		param_reset_all(void);
+
+
+/**
+ * Reset all parameters to their default values except for excluded parameters.
+ *
+ * This function also releases the storage used by struct parameters.
+ *
+ * @param excludes			Array of param names to exclude from resetting. Use a wildcard
+ *							at the end to exclude parameters with a certain prefix.
+ * @param num_excludes		The number of excludes provided.
+ */
+ __EXPORT void		param_reset_excludes(const char* excludes[], int num_excludes);
 
 /**
  * Export changed parameters to a file.
