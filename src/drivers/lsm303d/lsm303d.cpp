@@ -950,6 +950,13 @@ LSM303D::ioctl(struct file *filp, int cmd, unsigned long arg)
 	case ACCELIOCSELFTEST:
 		return accel_self_test();
 
+	case ACCELIOCSHWLOWPASS:
+		accel_set_onchip_lowpass_filter_bandwidth(arg);
+		return OK;
+
+	case ACCELIOCGHWLOWPASS:
+		return _accel_onchip_filter_bandwith;
+
 	default:
 		/* give it to the superclass */
 		return SPI::ioctl(filp, cmd, arg);
