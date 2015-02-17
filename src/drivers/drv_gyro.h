@@ -101,10 +101,10 @@ ORB_DECLARE(sensor_gyro);
 /** return the gyro internal sample rate in Hz */
 #define GYROIOCGSAMPLERATE	_GYROIOC(1)
 
-/** set the gyro internal lowpass filter to no lower than (arg) Hz */
+/** set the software low-pass filter cut-off in Hz */
 #define GYROIOCSLOWPASS		_GYROIOC(2)
 
-/** set the gyro internal lowpass filter to no lower than (arg) Hz */
+/** get the software low-pass filter cut-off in Hz */
 #define GYROIOCGLOWPASS		_GYROIOC(3)
 
 /** set the gyro scaling constants to (arg) */
@@ -121,5 +121,11 @@ ORB_DECLARE(sensor_gyro);
 
 /** check the status of the sensor */
 #define GYROIOCSELFTEST		_GYROIOC(8)
+
+/** set the hardware low-pass filter cut-off no lower than (arg) Hz */
+#define GYROIOCSHWLOWPASS	_GYROIOC(9)
+
+/** get the hardware low-pass filter cut-off in Hz*/
+#define GYROIOCGHWLOWPASS	_GYROIOC(10)
 
 #endif /* _DRV_GYRO_H */
