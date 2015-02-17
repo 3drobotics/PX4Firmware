@@ -249,6 +249,8 @@ private:
 	float			_gyro_range_scale;
 	float			_gyro_range_rad_s;
 
+	unsigned		_dlpf_freq;
+
 	unsigned		_sample_rate;
 	perf_counter_t		_accel_reads;
 	perf_counter_t		_gyro_reads;
@@ -498,6 +500,7 @@ MPU6000::MPU6000(int bus, const char *path_accel, const char *path_gyro, spi_dev
 	_gyro_scale{},
 	_gyro_range_scale(0.0f),
 	_gyro_range_rad_s(0.0f),
+	_dlpf_freq(MPU6000_DEFAULT_ONCHIP_FILTER_FREQ),
 	_sample_rate(1000),
 	_accel_reads(perf_alloc(PC_COUNT, "mpu6000_accel_read")),
 	_gyro_reads(perf_alloc(PC_COUNT, "mpu6000_gyro_read")),
@@ -790,23 +793,32 @@ MPU6000::_set_dlpf_filter(uint16_t frequency_hz)
 	/*
 	   choose next highest filter frequency available
 	 */
-        if (frequency_hz == 0) {
+	if (frequency_hz == 0) {
+		_dlpf_freq = 0;
 		filter = BITS_DLPF_CFG_2100HZ_NOLPF;
-        } else if (frequency_hz <= 5) {
+	} else if (frequency_hz <= 5) {
+		_dlpf_freq = 5;
 		filter = BITS_DLPF_CFG_5HZ;
 	} else if (frequency_hz <= 10) {
+		_dlpf_freq = 10;
 		filter = BITS_DLPF_CFG_10HZ;
 	} else if (frequency_hz <= 20) {
+		_dlpf_freq = 20;
 		filter = BITS_DLPF_CFG_20HZ;
 	} else if (frequency_hz <= 42) {
+		_dlpf_freq = 42;
 		filter = BITS_DLPF_CFG_42HZ;
 	} else if (frequency_hz <= 98) {
+		_dlpf_freq = 98;
 		filter = BITS_DLPF_CFG_98HZ;
 	} else if (frequency_hz <= 188) {
+		_dlpf_freq = 188;
 		filter = BITS_DLPF_CFG_188HZ;
 	} else if (frequency_hz <= 256) {
+		_dlpf_freq = 256;
 		filter = BITS_DLPF_CFG_256HZ_NOLPF2;
 	} else {
+		_dlpf_freq = 0;
 		filter = BITS_DLPF_CFG_2100HZ_NOLPF;
 	}
 	write_checked_reg(MPUREG_CONFIG, filter);
@@ -1240,8 +1252,6 @@ MPU6000::ioctl(struct file *filp, int cmd, unsigned long arg)
 		return _accel_filter_x.get_cutoff_freq();
 
 	case ACCELIOCSLOWPASS:
-		// set hardware filtering
-		_set_dlpf_filter(arg);
 		// set software filtering
 		_accel_filter_x.set_cutoff_frequency(1.0e6f / _call_interval, arg);
 		_accel_filter_y.set_cutoff_frequency(1.0e6f / _call_interval, arg);
@@ -1274,6 +1284,14 @@ MPU6000::ioctl(struct file *filp, int cmd, unsigned long arg)
 
 	case ACCELIOCSELFTEST:
 		return accel_self_test();
+
+	case ACCELIOCSHWLOWPASS:
+		_set_dlpf_filter(arg);
+		return OK;
+
+	case ACCELIOCGHWLOWPASS:
+		return _dlpf_freq;
+
 
 	default:
 		/* give it to the superclass */
@@ -1319,9 +1337,9 @@ MPU6000::gyro_ioctl(struct file *filp, int cmd, unsigned long arg)
 
 	case GYROIOCGLOWPASS:
 		return _gyro_filter_x.get_cutoff_freq();
+
 	case GYROIOCSLOWPASS:
-		// set hardware filtering
-		_set_dlpf_filter(arg);
+		// set software filtering
 		_gyro_filter_x.set_cutoff_frequency(1.0e6f / _call_interval, arg);
 		_gyro_filter_y.set_cutoff_frequency(1.0e6f / _call_interval, arg);
 		_gyro_filter_z.set_cutoff_frequency(1.0e6f / _call_interval, arg);
@@ -1348,6 +1366,13 @@ MPU6000::gyro_ioctl(struct file *filp, int cmd, unsigned long arg)
 
 	case GYROIOCSELFTEST:
 		return gyro_self_test();
+
+	case GYROIOCSHWLOWPASS:
+		_set_dlpf_filter(arg);
+		return OK;
+
+	case GYROIOCGHWLOWPASS:
+		return _dlpf_freq;
 
 	default:
 		/* give it to the superclass */
