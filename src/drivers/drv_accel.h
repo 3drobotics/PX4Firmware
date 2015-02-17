@@ -105,10 +105,10 @@ ORB_DECLARE(sensor_accel);
 /** return the accel internal sample rate in Hz */
 #define ACCELIOCGSAMPLERATE	_ACCELIOC(1)
 
-/** set the accel internal lowpass filter to no lower than (arg) Hz */
+/** set the software low-pass filter cut-off in Hz */
 #define ACCELIOCSLOWPASS	_ACCELIOC(2)
 
-/** return the accel internal lowpass filter in Hz */
+/** get the software low-pass filter cut-off in Hz */
 #define ACCELIOCGLOWPASS	_ACCELIOC(3)
 
 /** set the accel scaling constants to the structure pointed to by (arg) */
@@ -125,5 +125,11 @@ ORB_DECLARE(sensor_accel);
 
 /** get the result of a sensor self-test */
 #define ACCELIOCSELFTEST	_ACCELIOC(9)
+
+/** set the hardware low-pass filter cut-off no lower than (arg) Hz */
+#define ACCELIOCSHWLOWPASS	_ACCELIOC(10)
+
+/** get the hardware low-pass filter cut-off in Hz*/
+#define ACCELIOCGHWLOWPASS	_ACCELIOC(11)
 
 #endif /* _DRV_ACCEL_H */
