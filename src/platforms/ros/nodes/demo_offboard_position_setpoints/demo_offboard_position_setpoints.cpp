@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,21 +32,47 @@
  ****************************************************************************/
 
 /**
- * @file rc_check.h
+ * @file demo_offboard_position_Setpoints.cpp
  *
- * RC calibration check
- */
-
-#pragma once
-
-__BEGIN_DECLS
-
-/**
- * Check the RC calibration
+ * Demo for sending offboard position setpoints to mavros to show offboard position control in SITL
  *
- * @return			0 / OK if RC calibration is ok, index + 1 of the first
- *				channel that failed else (so 1 == first channel failed)
- */
-__EXPORT int	rc_calibration_check(int mavlink_fd);
+ * @author Thomas Gubler <thomasgubler@gmail.com>
+*/
 
-__END_DECLS
+#include "demo_offboard_position_setpoints.h"
+
+#include <platforms/px4_middleware.h>
+#include <geometry_msgs/PoseStamped.h>
+
+DemoOffboardPositionSetpoints::DemoOffboardPositionSetpoints() :
+	_n(),
+	_local_position_sp_pub(_n.advertise<geometry_msgs::PoseStamped>("mavros/setpoint/local_position", 1))
+{
+}
+
+
+int DemoOffboardPositionSetpoints::main()
+{
+	px4::Rate loop_rate(10);
+
+	while (ros::ok()) {
+		loop_rate.sleep();
+		ros::spinOnce();
+
+		/* Publish example offboard position setpoint */
+		geometry_msgs::PoseStamped pose;
+		pose.pose.position.x = 0;
+		pose.pose.position.y = 0;
+		pose.pose.position.z = 1;
+		_local_position_sp_pub.publish(pose);
+	}
+
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	ros::init(argc, argv, "demo_offboard_position_setpoints");
+	DemoOffboardPositionSetpoints d;
+	return d.main();
+}
