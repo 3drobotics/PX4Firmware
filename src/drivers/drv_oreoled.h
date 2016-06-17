@@ -101,7 +101,8 @@
 #define OREOLED_CMD_READ_LENGTH_MAX	10
 
 /* maximum number of commands retries */
-#define OEROLED_COMMAND_RETRIES	10
+#define OEROLED_COMMAND_RETRIES	2
+#define OEROLED_BOOT_COMMAND_RETRIES 10
 
 /* magic number used to verify the software reset is valid */
 #define OEROLED_RESET_NONCE				0x2A
@@ -112,7 +113,6 @@
 /* microseconds to hold-off between retries */
 #define OREOLED_RETRY_HOLDOFF_US		200
 
-#define OEROLED_BOOT_COMMAND_RETRIES	25
 #define OREOLED_BOOT_FLASH_WAITMS		10
 
 #define OREOLED_BOOT_SUPPORTED_VER		0x01
