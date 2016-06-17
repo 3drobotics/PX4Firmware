@@ -206,14 +206,9 @@ OREOLED_BOOTLOADER_AVR::cycle()
 		work_queue(HPWORK, &_work, (worker_t)&OREOLED_BOOTLOADER::cycle_trampoline, this,
 			   USEC2TICK(OREOLED_STARTUP_INTERVAL_US));
 		return;
-	} else if (_force_update || _num_inboot || _is_ready) {
-		run_updates();
-
-		/* schedule another attempt in 20mS */
-		work_queue(HPWORK, &_work, (worker_t)&OREOLED_BOOTLOADER::cycle_trampoline, this,
-			   USEC2TICK(OREOLED_UPDATE_INTERVAL_US));
-		return;
 	}
+
+	run_updates();
 
 	kill();
 }
@@ -289,7 +284,9 @@ OREOLED_BOOTLOADER_AVR::run_updates(void)
 		boot_all();
 		coerce_healthy();
 		_num_inboot = 0;
-	} else if (!_is_ready) {
+	}
+
+	if (!_is_ready) {
 		/* indicate a ready state since startup has finished */
 		_is_ready = true;
 	}
