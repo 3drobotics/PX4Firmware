@@ -2,7 +2,7 @@
 # OreoLED Bootloader Drivers
 #
 
-MODULE_COMMAND	= oreoled_bl
+MODULE_COMMAND	= oreoledbl
 SRCS			= oreoled_bootloader.cpp \
 					oreoled_bootloader_avr.cpp
 

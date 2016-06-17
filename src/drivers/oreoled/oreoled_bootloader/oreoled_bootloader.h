@@ -55,7 +55,8 @@ public:
 	OREOLED_BOOTLOADER() {};
 	virtual ~OREOLED_BOOTLOADER() {};
 
-	virtual int		update(void) = 0;
+	virtual	int		start(void) = 0;
+	virtual int		update(bool force) = 0;
 	virtual int		ioctl(const unsigned cmd, const unsigned long arg) = 0;
 };
 

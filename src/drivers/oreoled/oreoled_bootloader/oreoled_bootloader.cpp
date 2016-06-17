@@ -74,19 +74,26 @@ namespace
 	OREOLED_BOOTLOADER *g_oreoled_bl = nullptr;
 }
 
-static void oreoled_bl_usage();
+static void oreoled_bl_init_usage();
+static void oreoled_bl_cmd_usage();
 static oreoled_bl_target_t oreoled_bl_parse_target(char* target);
 
-extern "C" __EXPORT int oreoled_bl_main(int argc, char *argv[]);
+extern "C" __EXPORT int oreoledbl_main(int argc, char *argv[]);
 
 void
-oreoled_bl_usage()
+oreoled_bl_init_usage()
 {
-	warnx("missing command: try 'update [force]', 'kill', 'ping', 'blver', 'ver', 'checksum', 'colour <red> <green>', 'flash', 'boot'");
+	warnx("missing command: try 'start', 'update [force]'");
 	warnx("options:");
 	warnx("    -t target (auto)");
 	warnx("    -b i2cbus (%d)", PX4_I2C_BUS_LED);
 	warnx("    -a addr (0x%x)", OREOLED_BASE_I2C_ADDR);
+}
+
+void
+oreoled_bl_cmd_usage()
+{
+	warnx("missing command: try 'stop', 'ping', 'ver', 'appver', 'checksum', 'colour <red> <green>', 'flash', 'boot'");
 }
 
 oreoled_bl_target_t
@@ -94,7 +101,7 @@ oreoled_bl_parse_target(char *target)
 {
 	if (!strcmp(target, "avr")) {
 		return OREOLED_BL_TARGET_AVR;
-	} else if (!strcmp(target, "auto") == 0) {
+	} else if (!strcmp(target, "auto")) {
 		return OREOLED_BL_TARGET_DEFAULT;
 	}
 
@@ -102,7 +109,7 @@ oreoled_bl_parse_target(char *target)
 }
 
 int
-oreoled_bl_main(int argc, char *argv[])
+oreoledbl_main(int argc, char *argv[])
 {
 	int i2cdevice = -1;
 	int i2c_addr = OREOLED_BASE_I2C_ADDR; /* 7bit */
@@ -129,13 +136,13 @@ oreoled_bl_main(int argc, char *argv[])
 			warnx("invalid target '%s' specified", optarg);
 
 		default:
-			oreoled_bl_usage();
+			oreoled_bl_init_usage();
 			exit(0);
 		}
 	}
 
 	if (optind >= argc) {
-		oreoled_bl_usage();
+		oreoled_bl_init_usage();
 		exit(1);
 	}
 
@@ -144,7 +151,7 @@ oreoled_bl_main(int argc, char *argv[])
 	int ret;
 
 	/* start driver */
-	if (!strcmp(verb, "update")) {
+	if (!strcmp(verb, "start") || !strcmp(verb, "update")) {
 		if (g_oreoled_bl != nullptr) {
 			errx(1, "already started");
 		}
@@ -154,17 +161,10 @@ oreoled_bl_main(int argc, char *argv[])
 			i2cdevice = PX4_I2C_BUS_LED;
 		}
 
-		/* handle update flag */
-		bool force_update = false;
-		if (argc > 2 && !strcmp(argv[2], "force")) {
-			warnx("forcing update");
-			force_update = true;
-		}
-
 		/* instantiate driver */
 		switch (target) {
 			case OREOLED_BL_TARGET_AVR:
-				g_oreoled_bl = new OREOLED_BOOTLOADER_AVR(i2cdevice, i2c_addr, force_update);
+				g_oreoled_bl = new OREOLED_BOOTLOADER_AVR(i2cdevice, i2c_addr);
 				break;
 
 			default:
@@ -176,11 +176,29 @@ oreoled_bl_main(int argc, char *argv[])
 			errx(1, "failed to allocated memory for driver");
 		}
 
-		/* check object was created successfully */
-		if (g_oreoled_bl->update() != OK) {
+		if (!strcmp(verb, "start")) {
+			/* check object was created successfully */
+			if (g_oreoled_bl->start() != OK) {
+				delete g_oreoled_bl;
+				g_oreoled_bl = nullptr;
+				errx(1, "failed to start driver");
+			}
+		} else {
+			/* handle update flag */
+			bool force_update = false;
+			if (argc > optind && !strcmp(argv[optind + 1], "force")) {
+				warnx("forcing update");
+				force_update = true;
+			}
+
+			/* check object was created successfully */
+			if (g_oreoled_bl->update(force_update) != OK) {
+				errx(1, "failed to start driver");
+			}
+
+			/* clean up the driver */
 			delete g_oreoled_bl;
 			g_oreoled_bl = nullptr;
-			errx(1, "failed to start driver");
 		}
 
 		exit(0);
@@ -189,13 +207,13 @@ oreoled_bl_main(int argc, char *argv[])
 	/* need the driver past this point */
 	if (g_oreoled_bl == nullptr) {
 		warnx("not started");
-		oreoled_bl_usage();
+		oreoled_bl_init_usage();
 		exit(1);
 	}
 
-	if (!strcmp(verb, "kill")) {
+	if (!strcmp(verb, "stop")) {
 		/* delete the oreoled object if stop was requested, in addition to turning off the LED. */
-		if (!strcmp(verb, "kill")) {
+		if (!strcmp(verb, "stop")) {
 			OREOLED_BOOTLOADER *tmp_oreoled = g_oreoled_bl;
 			g_oreoled_bl = nullptr;
 			delete tmp_oreoled;
@@ -286,7 +304,7 @@ oreoled_bl_main(int argc, char *argv[])
 	}
 
 	/* ask all LEDs for their bootloader version */
-	if (!strcmp(verb, "blver")) {
+	if (!strcmp(verb, "ver")) {
 		if (argc < 2) {
 			errx(1, "Usage: oreoledbl ver");
 		}
@@ -306,7 +324,7 @@ oreoled_bl_main(int argc, char *argv[])
 	}
 
 	/* ask all LEDs for their application version */
-	if (!strcmp(verb, "ver")) {
+	if (!strcmp(verb, "appver")) {
 		if (argc < 2) {
 			errx(1, "Usage: oreoledbl appver");
 		}
@@ -369,6 +387,6 @@ oreoled_bl_main(int argc, char *argv[])
 		exit(ret);
 	}
 
-	oreoled_bl_usage();
+	oreoled_bl_cmd_usage();
 	exit(0);
 }

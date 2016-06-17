@@ -44,17 +44,18 @@
 class OREOLED_BOOTLOADER_AVR : public OREOLED_BOOTLOADER, public device::I2C
 {
 public:
-	OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr, bool force_update);
+	OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr);
 	~OREOLED_BOOTLOADER_AVR();
 
-	int			update(void);
+	int			start(void);
+	int			update(bool force);
 	int			ioctl(const unsigned cmd, const unsigned long arg);
 
 private:
 	void		print_info(void);
 	void		startup_discovery(void);
 	void		discover(void);
-	void		run_updates(void);
+	void		run_updates(bool force);
 
 	void		update_application(const bool force_update);
 	int			app_reset(const int led_num);
@@ -63,6 +64,7 @@ private:
 	uint16_t	inapp_checksum(const int led_num);
 	int			ping(const int led_num);
 	uint8_t		version(const int led_num);
+	int			version_is_supported(const uint8_t ver);
 	uint16_t	app_version(const int led_num);
 	uint16_t	app_checksum(const int led_num);
 	int			set_colour(const int led_num, const uint8_t red, const uint8_t green);
@@ -73,16 +75,15 @@ private:
 	uint16_t	firmware_checksum(void);
 	int			coerce_healthy(void);
 	void		cmd_add_checksum(oreoled_cmd_t* cmd);
+	int			response_is_valid(const oreoled_cmd_t* cmd, const uint8_t* response, const uint8_t response_len);
+	void		print_response(const uint8_t* response, const uint8_t response_length);
 
 	/* internal variables */
-	work_s			_work;							///< work queue for scheduling reads
 	bool			_healthy[OREOLED_NUM_LEDS];		///< health of each LED
 	bool			_in_boot[OREOLED_NUM_LEDS];		///< true for each LED that is in bootloader mode
 	uint8_t			_num_healthy;					///< number of healthy LEDs
 	uint8_t			_num_inboot;					///< number of LEDs in bootloader
 	uint64_t		_start_time;					///< system time we first attempt to communicate with battery
-	bool			_force_update;					///< true if the driver should update all LEDs
-	bool			_is_bootloading;				///< true if a bootloading operation is in progress
 	uint16_t		_fw_checksum;					///< the current 16bit XOR checksum of the built in oreoled firmware binary
 
 	/* performance checking */

@@ -53,7 +53,6 @@
 #include <sys/stat.h>
 
 #include <nuttx/arch.h>
-#include <nuttx/wqueue.h>
 #include <nuttx/clock.h>
 
 #include <systemlib/perf_counter.h>
@@ -71,7 +70,8 @@
 
 #define OREOLED_BOOT_FLASH_WAITMS		10
 
-#define OREOLED_BOOT_SUPPORTED_VER		0x01
+#define OREOLED_BOOT_SUPPORTED_VER_MIN	0x01
+#define OREOLED_BOOT_SUPPORTED_VER_MAX	0x02
 
 #define OREOLED_BOOT_CMD_PING			0x40
 #define OREOLED_BOOT_CMD_BL_VER			0x41
@@ -104,13 +104,10 @@
 #define OREOLED_UPDATE_INTERVAL_US		(1000000U / 50U)	///< time in microseconds, run at 50hz
 
 /* constructor */
-OREOLED_BOOTLOADER_AVR::OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr, bool force_update) :
+OREOLED_BOOTLOADER_AVR::OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr) :
 	I2C("oreoledbl_avr", OREOLEDBL0_DEVICE_PATH, bus, i2c_addr, 100000),
-	_work{},
 	_num_healthy(0),
 	_num_inboot(0),
-	_force_update(force_update),
-	_is_bootloading(false),
 	_fw_checksum(0x0000),
 	_probe_perf(perf_alloc(PC_ELAPSED, "oreoled_bl_probe")),
 	_comms_errors(perf_alloc(PC_COUNT, "oreoled_bl_comms_errors")),
@@ -136,7 +133,7 @@ OREOLED_BOOTLOADER_AVR::~OREOLED_BOOTLOADER_AVR()
 }
 
 int
-OREOLED_BOOTLOADER_AVR::update(void)
+OREOLED_BOOTLOADER_AVR::start(void)
 {
 	int ret;
 
@@ -148,7 +145,21 @@ OREOLED_BOOTLOADER_AVR::update(void)
 	}
 
 	startup_discovery();
-	run_updates();
+
+	return OK;
+}
+
+int
+OREOLED_BOOTLOADER_AVR::update(bool force)
+{
+	int ret;
+
+	ret = start();
+	if (ret != OK) {
+		return ret;
+	}
+
+	run_updates(force);
 
 	print_info();
 
@@ -323,10 +334,9 @@ OREOLED_BOOTLOADER_AVR::discover(void)
 }
 
 void
-OREOLED_BOOTLOADER_AVR::run_updates(void)
+OREOLED_BOOTLOADER_AVR::run_updates(bool force)
 {
-	update_application(_force_update);
-	_force_update = false;
+	update_application(force);
 
 	if (_num_inboot > 0) {
 		boot_all();
@@ -371,7 +381,6 @@ OREOLED_BOOTLOADER_AVR::update_application(const bool force_update)
 int
 OREOLED_BOOTLOADER_AVR::app_reset(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -411,7 +420,6 @@ OREOLED_BOOTLOADER_AVR::app_reset(const int led_num)
 	usleep(OREOLED_BOOT_FLASH_WAITMS * 1000 * 10);
 	usleep(OREOLED_BOOT_FLASH_WAITMS * 1000 * 10);
 
-	_is_bootloading = false;
 	return ret;
 }
 
@@ -472,7 +480,6 @@ OREOLED_BOOTLOADER_AVR::app_ping(const int led_num)
 uint16_t
 OREOLED_BOOTLOADER_AVR::inapp_checksum(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -487,17 +494,16 @@ OREOLED_BOOTLOADER_AVR::inapp_checksum(const int led_num)
 	boot_cmd.num_bytes = 3;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t APP_CHECKSUM_REPLY_LENGTH = 6;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 6);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, APP_CHECKSUM_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_PARAM_APP_CHECKSUM &&
-		    reply[5] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, APP_CHECKSUM_REPLY_LENGTH) == OK) {
 			warnx("bl app checksum OK from LED %i", boot_cmd.led_num);
 			warnx("bl app checksum msb: 0x%x", reply[3]);
 			warnx("bl app checksum lsb: 0x%x", reply[4]);
@@ -506,11 +512,7 @@ OREOLED_BOOTLOADER_AVR::inapp_checksum(const int led_num)
 
 		} else {
 			warnx("bl app checksum FAIL from LED %i", boot_cmd.led_num);
-			warnx("bl app checksum response  ADDR: 0x%x", reply[1]);
-			warnx("bl app checksum response   CMD: 0x%x", reply[2]);
-			warnx("bl app checksum response VER H: 0x%x", reply[3]);
-			warnx("bl app checksum response VER L: 0x%x", reply[4]);
-			warnx("bl app checksum response   XOR: 0x%x", reply[5]);
+			print_response(reply, APP_CHECKSUM_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl app checksum retrying LED %i", boot_cmd.led_num);
@@ -522,14 +524,12 @@ OREOLED_BOOTLOADER_AVR::inapp_checksum(const int led_num)
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
 }
 
 int
 OREOLED_BOOTLOADER_AVR::ping(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -543,28 +543,24 @@ OREOLED_BOOTLOADER_AVR::ping(const int led_num)
 	boot_cmd.num_bytes = 2;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_PING_REPLY_LENGTH = 5;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 5);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_PING_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_PING &&
-		    reply[3] == OREOLED_BOOT_CMD_PING_NONCE &&
-		    reply[4] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_PING_REPLY_LENGTH) == OK &&
+			reply[3] == OREOLED_BOOT_CMD_PING_NONCE) {
 			warnx("bl ping OK from LED %i", boot_cmd.led_num);
 			ret = OK;
 			break;
 
 		} else {
 			warnx("bl ping FAIL from LED %i", boot_cmd.led_num);
-			warnx("bl ping response  ADDR: 0x%x", reply[1]);
-			warnx("bl ping response   CMD: 0x%x", reply[2]);
-			warnx("bl ping response NONCE: 0x%x", reply[3]);
-			warnx("bl ping response   XOR: 0x%x", reply[4]);
+			print_response(reply, BL_PING_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl ping retrying LED %i", boot_cmd.led_num);
@@ -576,14 +572,12 @@ OREOLED_BOOTLOADER_AVR::ping(const int led_num)
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
 }
 
 uint8_t
 OREOLED_BOOTLOADER_AVR::version(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -597,27 +591,22 @@ OREOLED_BOOTLOADER_AVR::version(const int led_num)
 	boot_cmd.num_bytes = 2;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_VER_REPLY_LENGTH = 5;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 5);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_VER_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_BL_VER &&
-		    reply[3] == OREOLED_BOOT_SUPPORTED_VER &&
-		    reply[4] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_VER_REPLY_LENGTH) == OK && version_is_supported(reply[3]) == OK) {
 			warnx("bl ver from LED %i = %i", boot_cmd.led_num, reply[3]);
 			ret = reply[3];
 			break;
-
 		} else {
-			warnx("bl ver response  ADDR: 0x%x", reply[1]);
-			warnx("bl ver response   CMD: 0x%x", reply[2]);
-			warnx("bl ver response   VER: 0x%x", reply[3]);
-			warnx("bl ver response   XOR: 0x%x", reply[4]);
+			warnx("bl ver FAIL from LED %i", boot_cmd.led_num);
+			print_response(reply, BL_VER_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl ver retrying LED %i", boot_cmd.led_num);
@@ -629,14 +618,22 @@ OREOLED_BOOTLOADER_AVR::version(const int led_num)
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
+}
+
+int
+OREOLED_BOOTLOADER_AVR::version_is_supported(const uint8_t ver)
+{
+	if (ver >= OREOLED_BOOT_SUPPORTED_VER_MIN && ver <= OREOLED_BOOT_SUPPORTED_VER_MAX) {
+		return OK;
+	}
+
+	return EINVAL;
 }
 
 uint16_t
 OREOLED_BOOTLOADER_AVR::app_version(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -650,17 +647,16 @@ OREOLED_BOOTLOADER_AVR::app_version(const int led_num)
 	boot_cmd.num_bytes = 2;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_APP_VER_REPLY_LENGTH = 6;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 6);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_APP_VER_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_APP_VER &&
-		    reply[5] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_APP_VER_REPLY_LENGTH) == OK) {
 			warnx("bl app version OK from LED %i", boot_cmd.led_num);
 			warnx("bl app version msb: 0x%x", reply[3]);
 			warnx("bl app version lsb: 0x%x", reply[4]);
@@ -669,11 +665,7 @@ OREOLED_BOOTLOADER_AVR::app_version(const int led_num)
 
 		} else {
 			warnx("bl app version FAIL from LED %i", boot_cmd.led_num);
-			warnx("bl app version response  ADDR: 0x%x", reply[1]);
-			warnx("bl app version response   CMD: 0x%x", reply[2]);
-			warnx("bl app version response VER H: 0x%x", reply[3]);
-			warnx("bl app version response VER L: 0x%x", reply[4]);
-			warnx("bl app version response   XOR: 0x%x", reply[5]);
+			print_response(reply, BL_APP_VER_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl app version retrying LED %i", boot_cmd.led_num);
@@ -685,14 +677,12 @@ OREOLED_BOOTLOADER_AVR::app_version(const int led_num)
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
 }
 
 uint16_t
 OREOLED_BOOTLOADER_AVR::app_checksum(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -706,17 +696,16 @@ OREOLED_BOOTLOADER_AVR::app_checksum(const int led_num)
 	boot_cmd.num_bytes = 2;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_APP_CHECKSUM_REPLY_LENGTH = 6;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 6);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_APP_CHECKSUM_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_APP_CHECKSUM &&
-		    reply[5] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_APP_CHECKSUM_REPLY_LENGTH) == OK) {
 			warnx("bl app checksum OK from LED %i", boot_cmd.led_num);
 			warnx("bl app checksum msb: 0x%x", reply[3]);
 			warnx("bl app checksum lsb: 0x%x", reply[4]);
@@ -725,11 +714,7 @@ OREOLED_BOOTLOADER_AVR::app_checksum(const int led_num)
 
 		} else {
 			warnx("bl app checksum FAIL from LED %i", boot_cmd.led_num);
-			warnx("bl app checksum response  ADDR: 0x%x", reply[1]);
-			warnx("bl app checksum response   CMD: 0x%x", reply[2]);
-			warnx("bl app checksum response VER H: 0x%x", reply[3]);
-			warnx("bl app checksum response VER L: 0x%x", reply[4]);
-			warnx("bl app checksum response   XOR: 0x%x", reply[5]);
+			print_response(reply, BL_APP_CHECKSUM_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl app checksum retrying LED %i", boot_cmd.led_num);
@@ -741,14 +726,12 @@ OREOLED_BOOTLOADER_AVR::app_checksum(const int led_num)
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
 }
 
 int
 OREOLED_BOOTLOADER_AVR::set_colour(const int led_num, const uint8_t red, const uint8_t green)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -764,26 +747,23 @@ OREOLED_BOOTLOADER_AVR::set_colour(const int led_num, const uint8_t red, const u
 	boot_cmd.num_bytes = 4;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_COLOUR_REPLY_LENGTH = 4;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write+Read */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 4);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_COLOUR_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_SET_COLOUR &&
-		    reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_COLOUR_REPLY_LENGTH) == OK) {
 			warnx("bl set colour OK from LED %i", boot_cmd.led_num);
 			ret = OK;
 			break;
 
 		} else {
 			warnx("bl set colour FAIL from LED %i", boot_cmd.led_num);
-			warnx("bl set colour response  ADDR: 0x%x", reply[1]);
-			warnx("bl set colour response   CMD: 0x%x", reply[2]);
-			warnx("bl set colour response   XOR: 0x%x", reply[3]);
+			print_response(reply, BL_COLOUR_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl app colour retrying LED %i", boot_cmd.led_num);
@@ -795,14 +775,12 @@ OREOLED_BOOTLOADER_AVR::set_colour(const int led_num, const uint8_t red, const u
 		}
 	}
 
-	_is_bootloading = false;
 	return ret;
 }
 
 int
 OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -857,6 +835,7 @@ OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 	/* Set the current address */
 	set_address(OREOLED_BASE_I2C_ADDR + boot_cmd.led_num);
 
+	const uint8_t BL_FLASH_REPLY_LENGTH = 4;
 	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 
 	/* Loop through flash pages */
@@ -874,20 +853,16 @@ OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 		for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 			/* Send the I2C Write+Read */
 			memset(reply, 0, sizeof(reply));
-			transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 4);
+			transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_FLASH_REPLY_LENGTH);
 
 			/* Check the response */
-			if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-			    reply[2] == OREOLED_BOOT_CMD_WRITE_FLASH_A &&
-			    reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+			if (response_is_valid(&boot_cmd, reply, BL_FLASH_REPLY_LENGTH) == OK) {
 				warnx("bl flash %ia OK for LED %i", page_idx, boot_cmd.led_num);
 				break;
 
 			} else {
 				warnx("bl flash %ia FAIL for LED %i", page_idx, boot_cmd.led_num);
-				warnx("bl flash %ia response ADDR: 0x%x", page_idx, reply[1]);
-				warnx("bl flash %ia response  CMD: 0x%x", page_idx, reply[2]);
-				warnx("bl flash %ia response  XOR: 0x%x", page_idx, reply[3]);
+				print_response(reply, BL_FLASH_REPLY_LENGTH);
 
 				if (retry > 1) {
 					warnx("bl flash %ia retrying LED %i", page_idx, boot_cmd.led_num);
@@ -911,20 +886,16 @@ OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 		for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 			/* Send the I2C Write+Read */
 			memset(reply, 0, sizeof(reply));
-			transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 4);
+			transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_FLASH_REPLY_LENGTH);
 
 			/* Check the response */
-			if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-			    reply[2] == OREOLED_BOOT_CMD_WRITE_FLASH_B &&
-			    reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+			if (response_is_valid(&boot_cmd, reply, BL_FLASH_REPLY_LENGTH) == OK) {
 				warnx("bl flash %ib OK for LED %i", page_idx, boot_cmd.led_num);
 				break;
 
 			} else {
 				warnx("bl flash %ib FAIL for LED %i", page_idx, boot_cmd.led_num);
-				warnx("bl flash %ib response ADDR: 0x%x", page_idx, reply[1]);
-				warnx("bl flash %ib response  CMD: 0x%x", page_idx, reply[2]);
-				warnx("bl flash %ib response  XOR: 0x%x", page_idx, reply[3]);
+				print_response(reply, BL_FLASH_REPLY_LENGTH);
 
 				if (retry > 1) {
 					warnx("bl flash %ib retrying LED %i", page_idx, boot_cmd.led_num);
@@ -965,19 +936,16 @@ OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES * 2; retry > 0; retry--) {
 		/* Send the I2C Write */
 		memset(reply, 0, sizeof(reply));
-		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 4);
+		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, BL_FLASH_REPLY_LENGTH);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_FINALISE_FLASH &&
-		    reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_FLASH_REPLY_LENGTH) == OK) {
 			warnx("bl finalise OK from LED %i", boot_cmd.led_num);
 			break;
 
 		} else {
-			warnx("bl finalise response  ADDR: 0x%x", reply[1]);
-			warnx("bl finalise response   CMD: 0x%x", reply[2]);
-			warnx("bl finalise response   XOR: 0x%x", reply[3]);
+			warnx("bl flash finalise FAIL for LED %i", boot_cmd.led_num);
+			print_response(reply, BL_FLASH_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl finalise retrying LED %i", boot_cmd.led_num);
@@ -997,14 +965,12 @@ OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 	/* clean up file buffer */
 	delete[] buf;
 
-	_is_bootloading = false;
-	return 1;
+	return OK;
 }
 
 int
 OREOLED_BOOTLOADER_AVR::boot(const int led_num)
 {
-	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
 
@@ -1019,22 +985,25 @@ OREOLED_BOOTLOADER_AVR::boot(const int led_num)
 	boot_cmd.num_bytes = 3;
 	cmd_add_checksum(&boot_cmd);
 
+	const uint8_t BL_BOOT_REPLY_LENGTH = 4;
+	uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
+
 	for (uint8_t retry = OEROLED_BOOT_COMMAND_RETRIES; retry > 0; retry--) {
 		/* Send the I2C Write */
-		uint8_t reply[OREOLED_CMD_READ_LENGTH_MAX];
 		transfer(boot_cmd.buff, boot_cmd.num_bytes, reply, 4);
 
 		/* Check the response */
-		if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
-		    reply[2] == OREOLED_BOOT_CMD_BOOT_APP &&
-		    reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
+		if (response_is_valid(&boot_cmd, reply, BL_BOOT_REPLY_LENGTH) == OK) {
 			warnx("bl boot OK from LED %i", boot_cmd.led_num);
-			/* decrement the inboot counter so we don't get confused */
 			_in_boot[led_num] = false;
 			_num_inboot--;
 			ret = OK;
 			break;
 
+		/* 
+		 * The bootloader will respond with OREOLED_BOOT_CMD_BOOT_NONCE in
+		 * reply[2] if the boot operation failed
+		 */
 		} else if (reply[1] == OREOLED_BASE_I2C_ADDR + boot_cmd.led_num &&
 			   reply[2] == OREOLED_BOOT_CMD_BOOT_NONCE &&
 			   reply[3] == boot_cmd.buff[boot_cmd.num_bytes - 1]) {
@@ -1042,9 +1011,8 @@ OREOLED_BOOTLOADER_AVR::boot(const int led_num)
 			break;
 
 		} else {
-			warnx("bl boot response  ADDR: 0x%x", reply[1]);
-			warnx("bl boot response   CMD: 0x%x", reply[2]);
-			warnx("bl boot response   XOR: 0x%x", reply[3]);
+			warnx("bl boot FAIL for LED %i", boot_cmd.led_num);
+			print_response(reply, BL_BOOT_REPLY_LENGTH);
 
 			if (retry > 1) {
 				warnx("bl boot retrying LED %i", boot_cmd.led_num);
@@ -1062,7 +1030,6 @@ OREOLED_BOOTLOADER_AVR::boot(const int led_num)
 	usleep(OREOLED_BOOT_FLASH_WAITMS * 1000 * 10);
 	usleep(OREOLED_BOOT_FLASH_WAITMS * 1000 * 10);
 
-	_is_bootloading = false;
 	return ret;
 }
 
@@ -1152,11 +1119,11 @@ OREOLED_BOOTLOADER_AVR::firmware_checksum(void)
 int
 OREOLED_BOOTLOADER_AVR::flash_all(const bool force_update)
 {
-	int ret = -1;
+	int ret = OK;
 
 	for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
 		if (_healthy[i] && _in_boot[i]) {
-			int result;
+			int result = EINVAL;
 
 			if (force_update) {
 				result = flash(i);
@@ -1206,4 +1173,30 @@ OREOLED_BOOTLOADER_AVR::cmd_add_checksum(oreoled_cmd_t* cmd)
 	for (uint8_t i = 0; i < checksum_idx; i++) {
 		cmd->buff[checksum_idx] ^= cmd->buff[i];
 	}
+}
+
+int
+OREOLED_BOOTLOADER_AVR::response_is_valid(const oreoled_cmd_t* cmd, const uint8_t* response, const uint8_t response_len)
+{
+	if (response[1] == OREOLED_BASE_I2C_ADDR + cmd->led_num &&
+		response[2] == cmd->buff[0] &&
+		response[response_len - 1] == cmd->buff[cmd->num_bytes - 1]) {
+		return OK;
+	}
+
+	return EINVAL;
+}
+
+void
+OREOLED_BOOTLOADER_AVR::print_response(const uint8_t* response, const uint8_t response_length)
+{
+	const uint8_t checksum_idx = response_length - 1;
+	warnx("bl ver response  ADDR: 0x%x", response[1]);
+	warnx("bl ver response   CMD: 0x%x", response[2]);
+
+	for (uint8_t i = 3; i < checksum_idx; i++) {
+		warnx("bl ver response   [%i]: 0x%x", i, response[3]);
+	}
+
+	warnx("bl ver response   XOR: 0x%x", response[checksum_idx]);
 }
