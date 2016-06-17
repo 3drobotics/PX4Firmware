@@ -68,7 +68,7 @@
 
 #define OPEOLED_I2C_RETRYCOUNT  2           ///< i2c retry count
 #define OREOLED_TIMEOUT_USEC	1000000U	///< timeout looking for oreoleds 1 second after startup
-#define OREOLED_GENERALCALL_US	2000000U	///< general call sent every 2 seconds
+#define OREOLED_GENERALCALL_US	4000000U	///< general call sent every 4 seconds
 #define OREOLED_GENERALCALL_CMD	0x00		///< general call command sent at regular intervals
 
 #define OREOLED_STARTUP_INTERVAL_US		(1000000U / 10U)	///< time in microseconds, run at 10hz
