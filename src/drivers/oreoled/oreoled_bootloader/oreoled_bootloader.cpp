@@ -137,13 +137,13 @@ oreoledbl_main(int argc, char *argv[])
 
 		default:
 			oreoled_bl_init_usage();
-			exit(0);
+			return 0;
 		}
 	}
 
 	if (optind >= argc) {
 		oreoled_bl_init_usage();
-		exit(1);
+		return 1;
 	}
 
 	const char *verb = argv[optind];
@@ -201,14 +201,14 @@ oreoledbl_main(int argc, char *argv[])
 			g_oreoled_bl = nullptr;
 		}
 
-		exit(0);
+		return 0;
 	}
 
 	/* need the driver past this point */
 	if (g_oreoled_bl == nullptr) {
 		warnx("not started");
 		oreoled_bl_init_usage();
-		exit(1);
+		return 1;
 	}
 
 	if (!strcmp(verb, "stop")) {
@@ -216,7 +216,7 @@ oreoledbl_main(int argc, char *argv[])
 		OREOLED_BOOTLOADER *tmp_oreoled = g_oreoled_bl;
 		g_oreoled_bl = nullptr;
 		delete tmp_oreoled;
-		exit(0);
+		return 0;
 	}
 
 	/* send reset request to all LEDS */
@@ -236,7 +236,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* attempt to flash all LEDS in bootloader mode*/
@@ -256,7 +256,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* send bootloader boot request to all LEDS */
@@ -276,7 +276,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* send bootloader ping all LEDs */
@@ -296,7 +296,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* ask all LEDs for their bootloader version */
@@ -316,7 +316,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* ask all LEDs for their application version */
@@ -336,7 +336,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* ask all LEDs for their application checksum */
@@ -356,7 +356,7 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* set the default bootloader LED colour on all LEDs */
@@ -380,9 +380,9 @@ oreoledbl_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	oreoled_bl_cmd_usage();
-	exit(0);
+	return 0;
 }

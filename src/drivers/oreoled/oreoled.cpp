@@ -596,13 +596,13 @@ oreoled_main(int argc, char *argv[])
 
 		default:
 			oreoled_usage();
-			exit(0);
+			return 0;
 		}
 	}
 
 	if (optind >= argc) {
 		oreoled_usage();
-		exit(1);
+		return 1;
 	}
 
 	const char *verb = argv[optind];
@@ -635,14 +635,14 @@ oreoled_main(int argc, char *argv[])
 			errx(1, "failed to start driver");
 		}
 
-		exit(0);
+		return 0;
 	}
 
 	/* need the driver past this point */
 	if (g_oreoled == nullptr) {
 		warnx("not started");
 		oreoled_usage();
-		exit(1);
+		return 1;
 	}
 
 	if (!strcmp(verb, "test")) {
@@ -682,13 +682,13 @@ oreoled_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* display driver status */
 	if (!strcmp(verb, "info")) {
 		g_oreoled->info();
-		exit(0);
+		return 0;
 	}
 
 	if (!strcmp(verb, "off") || !strcmp(verb, "stop")) {
@@ -709,10 +709,10 @@ oreoled_main(int argc, char *argv[])
 			OREOLED *tmp_oreoled = g_oreoled;
 			g_oreoled = nullptr;
 			delete tmp_oreoled;
-			exit(0);
+			return 0;
 		}
 
-		exit(ret);
+		return ret;
 	}
 
 	/* send rgb request to all LEDS */
@@ -737,7 +737,7 @@ oreoled_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* send macro request to all LEDS */
@@ -757,7 +757,7 @@ oreoled_main(int argc, char *argv[])
 		/* sanity check macro number */
 		if (macro > OREOLED_PARAM_MACRO_ENUM_COUNT) {
 			errx(1, "invalid macro number %d", (int)macro);
-			exit(ret);
+			return ret;
 		}
 
 		oreoled_macrorun_t macro_run = {OREOLED_ALL_INSTANCES, (enum oreoled_macro)macro};
@@ -767,7 +767,7 @@ oreoled_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* send reset request to all LEDS */
@@ -787,14 +787,14 @@ oreoled_main(int argc, char *argv[])
 		}
 
 		close(fd);
-		exit(ret);
+		return ret;
 	}
 
 	/* send general hardware call to all LEDS */
 	if (!strcmp(verb, "gencall")) {
 		ret = g_oreoled->send_general_call();
 		warnx("sent general call");
-		exit(ret);
+		return ret;
 	}
 
 	/* send a string of bytes to an LED using send_bytes function */
@@ -834,9 +834,9 @@ oreoled_main(int argc, char *argv[])
 			warnx("sent %d bytes", (int)sendb.num_bytes);
 		}
 
-		exit(ret);
+		return ret;
 	}
 
 	oreoled_usage();
-	exit(0);
+	return 0;
 }
