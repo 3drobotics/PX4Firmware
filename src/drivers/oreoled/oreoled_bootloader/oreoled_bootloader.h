@@ -55,23 +55,8 @@ public:
 	OREOLED_BOOTLOADER() {};
 	virtual ~OREOLED_BOOTLOADER() {};
 
-	virtual int		init() = 0;
-	virtual int		info() = 0;
-	virtual int		ioctl(unsigned cmd, unsigned long arg) = 0;
-
-	/* Start the update process */
-	virtual void	start() = 0;
-
-	/* Kill the update process */
-	virtual void	kill() = 0;
-
-	/* returns true once the driver finished bootloading and ready for commands */
-	virtual bool	is_ready() = 0;
-
-	void cycle_trampoline(void *arg);
-
-protected:
-	virtual void	cycle() = 0;
+	virtual int		update(void) = 0;
+	virtual int		ioctl(const unsigned cmd, const unsigned long arg) = 0;
 };
 
 #endif /* OREOLED_BOOTLOADER_H */

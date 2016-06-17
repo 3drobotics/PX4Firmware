@@ -111,7 +111,6 @@ OREOLED_BOOTLOADER_AVR::OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr, bool force
 	_num_inboot(0),
 	_force_update(force_update),
 	_is_bootloading(false),
-	_is_ready(false),
 	_fw_checksum(0x0000),
 	_probe_perf(perf_alloc(PC_ELAPSED, "oreoled_bl_probe")),
 	_comms_errors(perf_alloc(PC_COUNT, "oreoled_bl_comms_errors")),
@@ -130,9 +129,6 @@ OREOLED_BOOTLOADER_AVR::OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr, bool force
 /* destructor */
 OREOLED_BOOTLOADER_AVR::~OREOLED_BOOTLOADER_AVR()
 {
-	/* make sure we are truly inactive */
-	kill();
-
 	/* free perf counters */
 	perf_free(_probe_perf);
 	perf_free(_comms_errors);
@@ -140,7 +136,7 @@ OREOLED_BOOTLOADER_AVR::~OREOLED_BOOTLOADER_AVR()
 }
 
 int
-OREOLED_BOOTLOADER_AVR::init()
+OREOLED_BOOTLOADER_AVR::update(void)
 {
 	int ret;
 
@@ -151,14 +147,83 @@ OREOLED_BOOTLOADER_AVR::init()
 		return ret;
 	}
 
-	/* start work queue */
-	start();
+	startup_discovery();
+	run_updates();
+
+	print_info();
 
 	return OK;
 }
 
 int
-OREOLED_BOOTLOADER_AVR::info()
+OREOLED_BOOTLOADER_AVR::ioctl(const unsigned cmd, const unsigned long arg)
+{
+	int ret = EINVAL;
+
+	switch (cmd) {
+	case OREOLED_BL_RESET:
+		ret = app_reset_all();
+		return ret;
+
+	case OREOLED_BL_PING:
+		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
+			if (_healthy[i]) {
+				ping(i);
+				ret = OK;
+			}
+		}
+		return ret;
+
+	case OREOLED_BL_VER:
+		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
+			if (_healthy[i]) {
+				version(i);
+				ret = OK;
+			}
+		}
+		return ret;
+
+	case OREOLED_BL_FLASH:
+		ret = flash_all(true);
+		return ret;
+
+	case OREOLED_BL_APP_VER:
+		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
+			if (_healthy[i]) {
+				app_version(i);
+				ret = OK;
+			}
+		}
+		return ret;
+
+	case OREOLED_BL_APP_CHECKSUM:
+		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
+			if (_healthy[i]) {
+				app_checksum(i);
+				ret = OK;
+			}
+		}
+		return ret;
+
+	case OREOLED_BL_SET_COLOUR:
+		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
+			if (_healthy[i]) {
+				set_colour(i, ((oreoled_rgbset_t *) arg)->red, ((oreoled_rgbset_t *) arg)->green);
+				ret = OK;
+			}
+		}
+		return ret;
+
+	case OREOLED_BL_BOOT_APP:
+		ret = boot_all();
+		return ret;
+	}
+
+	return ret;
+}
+
+void
+OREOLED_BOOTLOADER_AVR::print_info(void)
 {
 	/* print health info on each LED */
 	for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
@@ -174,47 +239,30 @@ OREOLED_BOOTLOADER_AVR::info()
 	perf_print_counter(_probe_perf);
 	perf_print_counter(_comms_errors);
 	perf_print_counter(_reply_errors);
-
-	return OK;
 }
 
 void
-OREOLED_BOOTLOADER_AVR::start()
-{
-	/* schedule a cycle to start things */
-	work_queue(HPWORK, &_work, (worker_t)&OREOLED_BOOTLOADER::cycle_trampoline, this, 1);
-}
-
-void
-OREOLED_BOOTLOADER_AVR::kill()
-{
-	work_cancel(HPWORK, &_work);
-}
-
-void
-OREOLED_BOOTLOADER_AVR::cycle()
+OREOLED_BOOTLOADER_AVR::startup_discovery(void)
 {
 	/* check time since startup */
 	uint64_t now = hrt_absolute_time();
 	bool startup_timeout = (now - _start_time > OREOLED_STARTUP_TIMEOUT_USEC);
 
 	/* during startup period keep searching for unhealthy LEDs */
-	if (!startup_timeout && _num_healthy < OREOLED_NUM_LEDS) {
-		run_initial_discovery();
+	do {
+		discover();
 
-		/* schedule another attempt in 0.1 sec */
-		work_queue(HPWORK, &_work, (worker_t)&OREOLED_BOOTLOADER::cycle_trampoline, this,
-			   USEC2TICK(OREOLED_STARTUP_INTERVAL_US));
-		return;
-	}
+		if (_num_healthy == OREOLED_NUM_LEDS) {
+			break;
+		}
 
-	run_updates();
-
-	kill();
+		/* wait for 0.1 sec before running discovery again */
+		usleep(OREOLED_STARTUP_INTERVAL_US);
+	} while ((hrt_absolute_time() - _start_time) < OREOLED_STARTUP_TIMEOUT_USEC);
 }
 
 void
-OREOLED_BOOTLOADER_AVR::run_initial_discovery(void)
+OREOLED_BOOTLOADER_AVR::discover(void)
 {
 	/* prepare command to turn off LED */
 	/* add two bytes of pre-amble to for higher signal to noise ratio */
@@ -285,15 +333,10 @@ OREOLED_BOOTLOADER_AVR::run_updates(void)
 		coerce_healthy();
 		_num_inboot = 0;
 	}
-
-	if (!_is_ready) {
-		/* indicate a ready state since startup has finished */
-		_is_ready = true;
-	}
 }
 
 void
-OREOLED_BOOTLOADER_AVR::update_application(bool force_update)
+OREOLED_BOOTLOADER_AVR::update_application(const bool force_update)
 {
 	/* check booted oreoleds to see if the app can report it's checksum (release versions >= v1.2) */
 	if(!force_update) {
@@ -326,7 +369,7 @@ OREOLED_BOOTLOADER_AVR::update_application(bool force_update)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::app_reset(int led_num)
+OREOLED_BOOTLOADER_AVR::app_reset(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -391,7 +434,7 @@ OREOLED_BOOTLOADER_AVR::app_reset_all(void)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::app_ping(int led_num)
+OREOLED_BOOTLOADER_AVR::app_ping(const int led_num)
 {
 	oreoled_cmd_t boot_cmd;
 	boot_cmd.led_num = led_num;
@@ -427,7 +470,7 @@ OREOLED_BOOTLOADER_AVR::app_ping(int led_num)
 }
 
 uint16_t
-OREOLED_BOOTLOADER_AVR::inapp_checksum(int led_num)
+OREOLED_BOOTLOADER_AVR::inapp_checksum(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -484,7 +527,7 @@ OREOLED_BOOTLOADER_AVR::inapp_checksum(int led_num)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::ping(int led_num)
+OREOLED_BOOTLOADER_AVR::ping(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -538,7 +581,7 @@ OREOLED_BOOTLOADER_AVR::ping(int led_num)
 }
 
 uint8_t
-OREOLED_BOOTLOADER_AVR::version(int led_num)
+OREOLED_BOOTLOADER_AVR::version(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -591,7 +634,7 @@ OREOLED_BOOTLOADER_AVR::version(int led_num)
 }
 
 uint16_t
-OREOLED_BOOTLOADER_AVR::app_version(int led_num)
+OREOLED_BOOTLOADER_AVR::app_version(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -647,7 +690,7 @@ OREOLED_BOOTLOADER_AVR::app_version(int led_num)
 }
 
 uint16_t
-OREOLED_BOOTLOADER_AVR::app_checksum(int led_num)
+OREOLED_BOOTLOADER_AVR::app_checksum(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -703,7 +746,7 @@ OREOLED_BOOTLOADER_AVR::app_checksum(int led_num)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::set_colour(int led_num, uint8_t red, uint8_t green)
+OREOLED_BOOTLOADER_AVR::set_colour(const int led_num, const uint8_t red, const uint8_t green)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -757,7 +800,7 @@ OREOLED_BOOTLOADER_AVR::set_colour(int led_num, uint8_t red, uint8_t green)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::flash(int led_num)
+OREOLED_BOOTLOADER_AVR::flash(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -959,7 +1002,7 @@ OREOLED_BOOTLOADER_AVR::flash(int led_num)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::boot(int led_num)
+OREOLED_BOOTLOADER_AVR::boot(const int led_num)
 {
 	_is_bootloading = true;
 	oreoled_cmd_t boot_cmd;
@@ -1107,7 +1150,7 @@ OREOLED_BOOTLOADER_AVR::firmware_checksum(void)
 }
 
 int
-OREOLED_BOOTLOADER_AVR::flash_all(bool force_update)
+OREOLED_BOOTLOADER_AVR::flash_all(const bool force_update)
 {
 	int ret = -1;
 
@@ -1163,98 +1206,4 @@ OREOLED_BOOTLOADER_AVR::cmd_add_checksum(oreoled_cmd_t* cmd)
 	for (uint8_t i = 0; i < checksum_idx; i++) {
 		cmd->buff[checksum_idx] ^= cmd->buff[i];
 	}
-}
-
-int
-OREOLED_BOOTLOADER_AVR::ioctl(unsigned cmd, unsigned long arg)
-{
-	int ret = -ENODEV;
-
-	switch (cmd) {
-	case OREOLED_BL_RESET:
-		ret = app_reset_all();
-		return ret;
-
-	case OREOLED_BL_PING:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				ping(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_VER:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				version(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_FLASH:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				flash(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_APP_VER:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				app_version(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_APP_CHECKSUM:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				app_checksum(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_SET_COLOUR:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				set_colour(i, ((oreoled_rgbset_t *) arg)->red, ((oreoled_rgbset_t *) arg)->green);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	case OREOLED_BL_BOOT_APP:
-		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
-			if (_healthy[i]) {
-				boot(i);
-				ret = OK;
-			}
-		}
-
-		return ret;
-
-	default:
-		ret = EINVAL;
-	}
-
-	return ret;
-}
-
-/* return the internal _is_ready flag indicating if initialisation is complete */
-bool
-OREOLED_BOOTLOADER_AVR::is_ready()
-{
-	return _is_ready;
 }

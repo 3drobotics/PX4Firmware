@@ -74,17 +74,6 @@ namespace
 	OREOLED_BOOTLOADER *g_oreoled_bl = nullptr;
 }
 
-void
-OREOLED_BOOTLOADER::cycle_trampoline(void *arg)
-{
-	OREOLED_BOOTLOADER *dev = (OREOLED_BOOTLOADER *)arg;
-
-	/* check global oreoled_bl and cycle */
-	if (g_oreoled_bl != nullptr) {
-		dev->cycle();
-	}
-}
-
 static void oreoled_bl_usage();
 static oreoled_bl_target_t oreoled_bl_parse_target(char* target);
 
@@ -188,19 +177,10 @@ oreoled_bl_main(int argc, char *argv[])
 		}
 
 		/* check object was created successfully */
-		if (g_oreoled_bl->init() != OK) {
+		if (g_oreoled_bl->update() != OK) {
 			delete g_oreoled_bl;
 			g_oreoled_bl = nullptr;
 			errx(1, "failed to start driver");
-		}
-
-		/* wait for up to 20 seconds for the driver become ready */
-		for (uint8_t i = 0; i < 20; i++) {
-			if (g_oreoled_bl != nullptr && g_oreoled_bl->is_ready()) {
-				break;
-			}
-
-			sleep(1);
 		}
 
 		exit(0);
@@ -211,12 +191,6 @@ oreoled_bl_main(int argc, char *argv[])
 		warnx("not started");
 		oreoled_bl_usage();
 		exit(1);
-	}
-
-	/* display driver status */
-	if (!strcmp(verb, "info")) {
-		g_oreoled_bl->info();
-		exit(0);
 	}
 
 	if (!strcmp(verb, "kill")) {

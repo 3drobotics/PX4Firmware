@@ -47,36 +47,28 @@ public:
 	OREOLED_BOOTLOADER_AVR(int bus, int i2c_addr, bool force_update);
 	~OREOLED_BOOTLOADER_AVR();
 
-	int			init();
-	int			info();
-	int			ioctl(unsigned cmd, unsigned long arg);
-
-	void		start();
-	void		kill();
-
-	/* returns true once the driver finished bootloading and ready for commands */
-	bool		is_ready();
-
-protected:
-	void		cycle();
+	int			update(void);
+	int			ioctl(const unsigned cmd, const unsigned long arg);
 
 private:
-	void		run_initial_discovery(void);
+	void		print_info(void);
+	void		startup_discovery(void);
+	void		discover(void);
 	void		run_updates(void);
 
-	void		update_application(bool force_update);
-	int			app_reset(int led_num);
+	void		update_application(const bool force_update);
+	int			app_reset(const int led_num);
 	int			app_reset_all(void);
-	int			app_ping(int led_num);
-	uint16_t	inapp_checksum(int led_num);
-	int			ping(int led_num);
-	uint8_t		version(int led_num);
-	uint16_t	app_version(int led_num);
-	uint16_t	app_checksum(int led_num);
-	int			set_colour(int led_num, uint8_t red, uint8_t green);
-	int			flash(int led_num);
-	int			flash_all(bool force_update);
-	int			boot(int led_num);
+	int			app_ping(const int led_num);
+	uint16_t	inapp_checksum(const int led_num);
+	int			ping(const int led_num);
+	uint8_t		version(const int led_num);
+	uint16_t	app_version(const int led_num);
+	uint16_t	app_checksum(const int led_num);
+	int			set_colour(const int led_num, const uint8_t red, const uint8_t green);
+	int			flash(const int led_num);
+	int			flash_all(const bool force_update);
+	int			boot(const int led_num);
 	int			boot_all(void);
 	uint16_t	firmware_checksum(void);
 	int			coerce_healthy(void);
@@ -91,7 +83,6 @@ private:
 	uint64_t		_start_time;					///< system time we first attempt to communicate with battery
 	bool			_force_update;					///< true if the driver should update all LEDs
 	bool			_is_bootloading;				///< true if a bootloading operation is in progress
-	bool			_is_ready;						///< set to true once the driver has completly initialised
 	uint16_t		_fw_checksum;					///< the current 16bit XOR checksum of the built in oreoled firmware binary
 
 	/* performance checking */
