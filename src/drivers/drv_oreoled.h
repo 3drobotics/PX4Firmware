@@ -70,6 +70,9 @@
 /* Oreo LED driver supports up to 4 leds */
 #define OREOLED_NUM_LEDS		4
 
+/* base i2c address (7-bit) */
+#define OREOLED_BASE_I2C_ADDR	0x68
+
 /* instance of 0xff means apply to all instances */
 #define OREOLED_ALL_INSTANCES	0xff
 

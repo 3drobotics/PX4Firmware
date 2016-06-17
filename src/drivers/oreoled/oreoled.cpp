@@ -66,8 +66,6 @@
 #include <drivers/drv_oreoled.h>
 #include <drivers/device/ringbuffer.h>
 
-#define OREOLED_NUM_LEDS		4			///< maximum number of LEDs the oreo led driver can support
-#define OREOLED_BASE_I2C_ADDR	0x68		///< base i2c address (7-bit)
 #define OPEOLED_I2C_RETRYCOUNT  2           ///< i2c retry count
 #define OREOLED_TIMEOUT_USEC	1000000U	///< timeout looking for oreoleds 1 second after startup
 #define OREOLED_GENERALCALL_US	2000000U	///< general call sent every 2 seconds
