@@ -89,7 +89,7 @@
 #define OEROLED_BOOT_COMMAND_RETRIES	10
 
 /* magic number used to verify the software reset is valid */
-#define OEROLED_RESET_NONCE				0x2A
+#define OREOLED_RESET_NONCE				0x2A
 
 #define OREOLED_BOOT_CMD_PING_NONCE		0x2A
 #define OREOLED_BOOT_CMD_BOOT_NONCE		0xA2
@@ -392,7 +392,7 @@ OREOLED_BOOTLOADER_AVR::app_reset(const int led_num)
 	/* send a reset */
 	boot_cmd.buff[0] = OREOLED_PATTERN_PARAMUPDATE;
 	boot_cmd.buff[1] = OREOLED_PARAM_RESET;
-	boot_cmd.buff[2] = OEROLED_RESET_NONCE;
+	boot_cmd.buff[2] = OREOLED_RESET_NONCE;
 	boot_cmd.buff[3] = OREOLED_BASE_I2C_ADDR + boot_cmd.led_num;
 	boot_cmd.num_bytes = 4;
 	cmd_add_checksum(&boot_cmd);

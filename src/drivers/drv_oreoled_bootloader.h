@@ -32,7 +32,7 @@
  ****************************************************************************/
 
 /**
- * @file drv_oreoled.h
+ * @file drv_oreoled_bootloader.h
  * @author Angus Peart <angusp@gmail.com>
  * OreoLED bootloader device API
  */

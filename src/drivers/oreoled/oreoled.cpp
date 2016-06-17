@@ -77,7 +77,7 @@
 #define OREOLED_CMD_QUEUE_SIZE	10		///< up to 10 messages can be queued up to send to the LEDs
 
 /* magic number used to verify the software reset is valid */
-#define OEROLED_RESET_NONCE				0x2A
+#define OREOLED_RESET_NONCE				0x2A
 
 class OREOLED : public device::I2C
 {
@@ -472,7 +472,7 @@ OREOLED::ioctl(struct file *filp, int cmd, unsigned long arg)
 		new_cmd.led_num = OREOLED_ALL_INSTANCES;
 		new_cmd.buff[0] = OREOLED_PATTERN_PARAMUPDATE;
 		new_cmd.buff[1] = OREOLED_PARAM_RESET;
-		new_cmd.buff[2] = OEROLED_RESET_NONCE;
+		new_cmd.buff[2] = OREOLED_RESET_NONCE;
 		new_cmd.num_bytes = 3;
 
 		for (uint8_t i = 0; i < OREOLED_NUM_LEDS; i++) {
