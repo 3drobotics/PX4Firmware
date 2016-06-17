@@ -363,7 +363,7 @@ OREOLED::startup_discovery(void)
 				   which indicates a response from firmwares >= 1.3 */
 				if (reply[1] == OREOLED_BASE_I2C_ADDR + cmd.led_num &&
 				    reply[2] == (cmd_checksum + 1)) {
-					log("oreoled %u ok - in application", (unsigned)i);
+					DEVICE_LOG("oreoled %u ok - in application", (unsigned)i);
 					_healthy[i] = true;
 					_num_healthy++;
 				} else {
