@@ -32,7 +32,7 @@
  ****************************************************************************/
 
 /**
- * @file oreoled.cpp
+ * @file oreoled_bootloader_avr.cpp
  * @author Angus Peart <angusp@gmail.com>
  */
 

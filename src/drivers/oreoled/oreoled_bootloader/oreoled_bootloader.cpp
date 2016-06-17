@@ -32,7 +32,7 @@
  ****************************************************************************/
 
 /**
- * @file oreoled.cpp
+ * @file oreoled_bootloader.cpp
  * @author Angus Peart <angusp@gmail.com>
  */
 
@@ -129,7 +129,7 @@ oreoledbl_main(int argc, char *argv[])
 			break;
 
 		case 't':
-			target = oreoled_bl_parse_target(strdup(optarg));
+			target = oreoled_bl_parse_target(optarg);
 			if (target != OREOLED_BL_TARGET_INVALID) {
 				break;
 			}
@@ -213,14 +213,10 @@ oreoledbl_main(int argc, char *argv[])
 
 	if (!strcmp(verb, "stop")) {
 		/* delete the oreoled object if stop was requested, in addition to turning off the LED. */
-		if (!strcmp(verb, "stop")) {
-			OREOLED_BOOTLOADER *tmp_oreoled = g_oreoled_bl;
-			g_oreoled_bl = nullptr;
-			delete tmp_oreoled;
-			exit(0);
-		}
-
-		exit(ret);
+		OREOLED_BOOTLOADER *tmp_oreoled = g_oreoled_bl;
+		g_oreoled_bl = nullptr;
+		delete tmp_oreoled;
+		exit(0);
 	}
 
 	/* send reset request to all LEDS */
